@@ -8,7 +8,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="format-detection" content="telephone=no">
-<title>BEasyMix Studio — Responsive</title>
+<title>BEasyMix Studio — Live</title>
 <style>
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
   :root{
@@ -153,7 +153,7 @@
 <div class="app">
   <header>
     <div class="brand">
-      <h1>🎛️ BEasyMix Studio</h1>
+      <h1>🎛️ BEasyMix Studio <span style="font-size:12px;color:var(--acc2)">LIVE</span></h1>
       <div class="subtitle">
         <span>Prototype local · Web Audio API</span>
       </div>
@@ -533,14 +533,14 @@
     </div>
 
     <div class="card">
-      <h2>Rendu</h2>
+      <h2>Rendu final (Offline)</h2>
       <div class="row">
         <button class="btn" id="btnRenderFull" disabled>🎚️ Mix complet</button>
         <button class="btn sec" id="btnRenderVoice" disabled>🎤 Voix</button>
         <button class="btn sec" id="btnRenderInst" disabled>🎹 Instru</button>
       </div>
       <div class="progress" id="progress"><div class="progress-bar" id="progress-bar"></div></div>
-      <div class="status" id="status">En attente de fichiers…</div>
+      <div class="status" id="status">Prêt. Clique sur Play pour écouter en direct.</div>
     </div>
 
     <div class="card">
@@ -596,12 +596,14 @@
 
 <script>
 /* ============================================================
-   BEASYMIX STUDIO — moteur audio
+   BEASYMIX STUDIO — Moteur temps réel
    ============================================================ */
 const $ = id => document.getElementById(id);
 const state = {
   voice: null, inst: null, adlib: null, voiceOut: null, render: null,
-  ctx: null, playing: false, source: null,
+  ctx: null, playing: false, 
+  sources: [],
+  liveNodes: null,
   analyser: null, micStream: null, mediaRec: null, micChunks: [],
   micRAF: null, playheadRAF: null,
   startOffset: 0, startCtxTime: 0,
@@ -619,7 +621,7 @@ const dbToGain = db => Math.pow(10, db/20);
 const gainToDb = g => 20 * Math.log10(Math.max(g, 1e-9));
 
 /* ============================================================
-   CANVAS — DPR-aware + ResizeObserver
+   CANVAS
    ============================================================ */
 function fitCanvas(canvas) {
   if (!canvas) return null;
@@ -652,7 +654,7 @@ window.addEventListener('orientationchange', () => {
 window.addEventListener('resize', () => drawWaveformAll());
 
 /* ============================================================
-   CHARGEMENT & FUSION FICHIERS MULTIPLES
+   CHARGEMENT FICHIERS
    ============================================================ */
 async function decodeFile(file) {
   const ab = await file.arrayBuffer();
@@ -666,28 +668,21 @@ async function mergeAudioBuffers(buffers) {
   let maxLen = 0;
   let maxChannels = 2;
   const sampleRate = buffers[0].sampleRate;
-
   buffers.forEach(buf => {
     if (buf.length > maxLen) maxLen = buf.length;
     if (buf.numberOfChannels > maxChannels) maxChannels = buf.numberOfChannels;
   });
-
   const outCtx = new OfflineAudioContext(maxChannels, maxLen, sampleRate);
   const outBuffer = outCtx.createBuffer(maxChannels, maxLen, sampleRate);
-
   for (let c = 0; c < maxChannels; c++) {
     const outData = outBuffer.getChannelData(c);
     for (const buf of buffers) {
       if (c < buf.numberOfChannels) {
         const inData = buf.getChannelData(c);
-        for (let i = 0; i < inData.length; i++) {
-          outData[i] += inData[i];
-        }
+        for (let i = 0; i < inData.length; i++) outData[i] += inData[i];
       }
     }
-    for (let i = 0; i < outData.length; i++) {
-      outData[i] = Math.max(-1, Math.min(1, outData[i]));
-    }
+    for (let i = 0; i < outData.length; i++) outData[i] = Math.max(-1, Math.min(1, outData[i]));
   }
   return outBuffer;
 }
@@ -695,31 +690,19 @@ async function mergeAudioBuffers(buffers) {
 async function loadTrack(inputId, nameId, dzId, key) {
   const files = $(inputId).files;
   if (!files || files.length === 0) return;
-  
   status(`Chargement de ${files.length} fichier(s)…`);
   try {
     const buffers = await Promise.all(Array.from(files).map(decodeFile));
-    let finalBuffer;
-
-    if (buffers.length === 1) {
-      finalBuffer = buffers[0];
-    } else {
-      finalBuffer = await mergeAudioBuffers(buffers);
-    }
-
+    let finalBuffer = buffers.length === 1 ? buffers[0] : await mergeAudioBuffers(buffers);
     state[key] = finalBuffer;
-    
     if (files.length === 1) {
-      $(nameId).textContent = `${files[0].name} · ${finalBuffer.duration.toFixed(1)}s · ${finalBuffer.sampleRate}Hz`;
+      $(nameId).textContent = `${files[0].name} · ${finalBuffer.duration.toFixed(1)}s`;
     } else {
       $(nameId).textContent = `${files.length} pistes fusionnées · ${finalBuffer.duration.toFixed(1)}s`;
     }
-    
     $(dzId).classList.add('filled');
     status('Fichier(s) chargé(s) avec succès.', 'ok');
-  } catch (e) { 
-    status('Erreur : ' + e.message, 'err'); 
-  }
+  } catch (e) { status('Erreur : ' + e.message, 'err'); }
   updateButtons(); drawWaveformAll();
 }
 
@@ -735,20 +718,14 @@ $('f-adlib').addEventListener('change', () => loadTrack('f-adlib','n-adlib','dz-
   el.addEventListener('dragleave', () => el.classList.remove('dragover'));
   el.addEventListener('drop', async e => {
     e.preventDefault(); el.classList.remove('dragover');
-    const files = e.dataTransfer.files; 
-    if (!files || files.length === 0) return;
-    
+    const files = e.dataTransfer.files; if (!files || files.length === 0) return;
     status(`Chargement de ${files.length} fichier(s)…`);
     try {
       const buffers = await Promise.all(Array.from(files).map(decodeFile));
-      let finalBuffer;
-      if (buffers.length === 1) finalBuffer = buffers[0];
-      else finalBuffer = await mergeAudioBuffers(buffers);
-      
+      let finalBuffer = buffers.length === 1 ? buffers[0] : await mergeAudioBuffers(buffers);
       state[key] = finalBuffer;
       if (files.length === 1) $(name).textContent = `${files[0].name} · ${finalBuffer.duration.toFixed(1)}s`;
       else $(name).textContent = `${files.length} pistes fusionnées · ${finalBuffer.duration.toFixed(1)}s`;
-      
       el.classList.add('filled');
       status('Fichier(s) chargé(s).', 'ok');
       updateButtons(); drawWaveformAll();
@@ -757,83 +734,62 @@ $('f-adlib').addEventListener('change', () => loadTrack('f-adlib','n-adlib','dz-
 });
 
 /* ============================================================
-   SLIDERS / PARAMS
+   PARAMS / UI
    ============================================================ */
 const sliderDefs = [
-  ['o-trimS','o-trimS-val', v=>`${(v/100).toFixed(2)} s`],
-  ['o-trimE','o-trimE-val', v=>`${v}%`],
-  ['o-fadeIn','o-fadeIn-val', v=>`${(v/10).toFixed(2)} s`],
-  ['o-fadeOut','o-fadeOut-val', v=>`${(v/10).toFixed(2)} s`],
-  ['v-gain','v-gain-val', v=>`${v} dB`],
-  ['v-pan','v-pan-val', v=> v==0?'C':(v<0?`G${-v}`:`D${v}`)],
-  ['v-gate-thr','v-gate-thr-val', v=>`${v} dB`],
-  ['v-gate-ratio','v-gate-ratio-val', v=>`${v}:1`],
-  ['v-eq-l','v-eq-l-val', v=>`${v} dB`],
-  ['v-eq-lm','v-eq-lm-val', v=>`${v} dB`],
-  ['v-eq-hm','v-eq-hm-val', v=>`${v} dB`],
-  ['v-eq-h','v-eq-h-val', v=>`${v} dB`],
-  ['v-hpf','v-hpf-val', v=>`${v} Hz`],
-  ['v-deess','v-deess-val', v=>`${v}%`],
-  ['v-c-thr','v-c-thr-val', v=>`${v} dB`],
-  ['v-c-ratio','v-c-ratio-val', v=>`${v}:1`],
-  ['v-c-att','v-c-att-val', v=>`${v} ms`],
-  ['v-c-rel','v-c-rel-val', v=>`${v} ms`],
-  ['v-c-knee','v-c-knee-val', v=>`${v} dB`],
-  ['v-c-make','v-c-make-val', v=>`${v} dB`],
-  ['v-sat','v-sat-val', v=>`${v}%`],
-  ['v-dbl','v-dbl-val', v=>`${v}%`],
-  ['v-dbl-t','v-dbl-t-val', v=>`${v} ms`],
-  ['v-h1','v-h1-val', v=>`${v}`],
-  ['v-h2','v-h2-val', v=>`${v}`],
-  ['at-strength','at-strength-val', v=>`${v}%`],
-  ['at-speed','at-speed-val', v=>`${v} ms`],
-  ['fx-rev-size','fx-rev-size-val', v=>`${v} s`],
-  ['fx-rev-damp','fx-rev-damp-val', v=>`${v}`],
-  ['fx-rev-mix','fx-rev-mix-val', v=>`${v}%`],
-  ['fx-rev-pre','fx-rev-pre-val', v=>`${v} ms`],
-  ['fx-dly-t','fx-dly-t-val', v=>`${v} ms`],
-  ['fx-dly-fb','fx-dly-fb-val', v=>`${v}%`],
-  ['fx-dly-mix','fx-dly-mix-val', v=>`${v}%`],
-  ['fx-ch-rate','fx-ch-rate-val', v=>`${v} Hz`],
-  ['fx-ch-depth','fx-ch-depth-val', v=>`${v} ms`],
-  ['fx-ch-mix','fx-ch-mix-val', v=>`${v}%`],
-  ['fx-filt-f','fx-filt-f-val', v=>`${v} Hz`],
-  ['fx-filt-q','fx-filt-q-val', v=>Number(v).toFixed(1)],
-  ['i-gain','i-gain-val', v=>`${v} dB`],
-  ['i-pan','i-pan-val', v=> v==0?'C':(v<0?`G${-v}`:`D${v}`)],
-  ['i-eq-l','i-eq-l-val', v=>`${v} dB`],
-  ['i-eq-m','i-eq-m-val', v=>`${v} dB`],
-  ['i-eq-h','i-eq-h-val', v=>`${v} dB`],
-  ['i-hpf','i-hpf-val', v=>`${v} Hz`],
-  ['i-duck-amt','i-duck-amt-val', v=>`${v} dB`],
-  ['i-duck-rel','i-duck-rel-val', v=>`${v} ms`],
-  ['a-gain','a-gain-val', v=>`${v} dB`],
-  ['a-pan','a-pan-val', v=> v==0?'C':(v<0?`G${-v}`:`D${v}`)],
-  ['a-rev','a-rev-val', v=>`${v}%`],
-  ['m-eq-l','m-eq-l-val', v=>`${v} dB`],
-  ['m-eq-m','m-eq-m-val', v=>`${v} dB`],
-  ['m-eq-h','m-eq-h-val', v=>`${v} dB`],
-  ['m-c-thr','m-c-thr-val', v=>`${v} dB`],
-  ['m-c-ratio','m-c-ratio-val', v=>`${v}:1`],
-  ['m-c-att','m-c-att-val', v=>`${v} ms`],
-  ['m-c-rel','m-c-rel-val', v=>`${v} ms`],
-  ['m-c-knee','m-c-knee-val', v=>`${v} dB`],
-  ['m-c-make','m-c-make-val', v=>`${v} dB`],
-  ['m-width','m-width-val', v=>`${v}%`],
-  ['m-sat','m-sat-val', v=>`${v}%`],
-  ['m-phase','m-phase-val', v=>`${v}°`],
-  ['m-lim-thr','m-lim-thr-val', v=>`${v} dB`],
-  ['m-lim-rel','m-lim-rel-val', v=>`${v} ms`],
+  ['o-trimS','o-trimS-val', v=>`${(v/100).toFixed(2)} s`], ['o-trimE','o-trimE-val', v=>`${v}%`],
+  ['o-fadeIn','o-fadeIn-val', v=>`${(v/10).toFixed(2)} s`], ['o-fadeOut','o-fadeOut-val', v=>`${(v/10).toFixed(2)} s`],
+  ['v-gain','v-gain-val', v=>`${v} dB`], ['v-pan','v-pan-val', v=> v==0?'C':(v<0?`G${-v}`:`D${v}`)],
+  ['v-gate-thr','v-gate-thr-val', v=>`${v} dB`], ['v-gate-ratio','v-gate-ratio-val', v=>`${v}:1`],
+  ['v-eq-l','v-eq-l-val', v=>`${v} dB`], ['v-eq-lm','v-eq-lm-val', v=>`${v} dB`],
+  ['v-eq-hm','v-eq-hm-val', v=>`${v} dB`], ['v-eq-h','v-eq-h-val', v=>`${v} dB`],
+  ['v-hpf','v-hpf-val', v=>`${v} Hz`], ['v-deess','v-deess-val', v=>`${v}%`],
+  ['v-c-thr','v-c-thr-val', v=>`${v} dB`], ['v-c-ratio','v-c-ratio-val', v=>`${v}:1`],
+  ['v-c-att','v-c-att-val', v=>`${v} ms`], ['v-c-rel','v-c-rel-val', v=>`${v} ms`],
+  ['v-c-knee','v-c-knee-val', v=>`${v} dB`], ['v-c-make','v-c-make-val', v=>`${v} dB`],
+  ['v-sat','v-sat-val', v=>`${v}%`], ['v-dbl','v-dbl-val', v=>`${v}%`], ['v-dbl-t','v-dbl-t-val', v=>`${v} ms`],
+  ['v-h1','v-h1-val', v=>`${v}`], ['v-h2','v-h2-val', v=>`${v}`],
+  ['at-strength','at-strength-val', v=>`${v}%`], ['at-speed','at-speed-val', v=>`${v} ms`],
+  ['fx-rev-size','fx-rev-size-val', v=>`${v} s`], ['fx-rev-damp','fx-rev-damp-val', v=>`${v}`],
+  ['fx-rev-mix','fx-rev-mix-val', v=>`${v}%`], ['fx-rev-pre','fx-rev-pre-val', v=>`${v} ms`],
+  ['fx-dly-t','fx-dly-t-val', v=>`${v} ms`], ['fx-dly-fb','fx-dly-fb-val', v=>`${v}%`], ['fx-dly-mix','fx-dly-mix-val', v=>`${v}%`],
+  ['fx-ch-rate','fx-ch-rate-val', v=>`${v} Hz`], ['fx-ch-depth','fx-ch-depth-val', v=>`${v} ms`], ['fx-ch-mix','fx-ch-mix-val', v=>`${v}%`],
+  ['fx-filt-f','fx-filt-f-val', v=>`${v} Hz`], ['fx-filt-q','fx-filt-q-val', v=>Number(v).toFixed(1)],
+  ['i-gain','i-gain-val', v=>`${v} dB`], ['i-pan','i-pan-val', v=> v==0?'C':(v<0?`G${-v}`:`D${v}`)],
+  ['i-eq-l','i-eq-l-val', v=>`${v} dB`], ['i-eq-m','i-eq-m-val', v=>`${v} dB`], ['i-eq-h','i-eq-h-val', v=>`${v} dB`],
+  ['i-hpf','i-hpf-val', v=>`${v} Hz`], ['i-duck-amt','i-duck-amt-val', v=>`${v} dB`], ['i-duck-rel','i-duck-rel-val', v=>`${v} ms`],
+  ['a-gain','a-gain-val', v=>`${v} dB`], ['a-pan','a-pan-val', v=> v==0?'C':(v<0?`G${-v}`:`D${v}`)], ['a-rev','a-rev-val', v=>`${v}%`],
+  ['m-eq-l','m-eq-l-val', v=>`${v} dB`], ['m-eq-m','m-eq-m-val', v=>`${v} dB`], ['m-eq-h','m-eq-h-val', v=>`${v} dB`],
+  ['m-c-thr','m-c-thr-val', v=>`${v} dB`], ['m-c-ratio','m-c-ratio-val', v=>`${v}:1`],
+  ['m-c-att','m-c-att-val', v=>`${v} ms`], ['m-c-rel','m-c-rel-val', v=>`${v} ms`],
+  ['m-c-knee','m-c-knee-val', v=>`${v} dB`], ['m-c-make','m-c-make-val', v=>`${v} dB`],
+  ['m-width','m-width-val', v=>`${v}%`], ['m-sat','m-sat-val', v=>`${v}%`], ['m-phase','m-phase-val', v=>`${v}°`],
+  ['m-lim-thr','m-lim-thr-val', v=>`${v} dB`], ['m-lim-rel','m-lim-rel-val', v=>`${v} ms`],
   ['m-lufs','m-lufs-val', v=>`${v} LUFS`],
 ];
+
 sliderDefs.forEach(([id,out,fmt]) => {
   const el = $(id); if (!el) return;
   state.autoParamIds.push(id);
-  const upd = () => { $(out).textContent = fmt(el.value); };
+  const upd = () => { 
+    $(out).textContent = fmt(el.value); 
+    if (state.playing && state.liveNodes) updateLiveParam(id, parseFloat(el.value));
+  };
   el.addEventListener('input', upd); upd();
 });
-document.querySelectorAll('input[type=checkbox]').forEach(cb => state.autoParamIds.push(cb.id));
-document.querySelectorAll('select').forEach(sel => state.autoParamIds.push(sel.id));
+
+document.querySelectorAll('input[type=checkbox]').forEach(cb => {
+  state.autoParamIds.push(cb.id);
+  cb.addEventListener('change', () => {
+    if (state.playing && state.liveNodes) updateLiveParam(cb.id, cb.checked);
+  });
+});
+document.querySelectorAll('select').forEach(sel => {
+  state.autoParamIds.push(sel.id);
+  sel.addEventListener('change', () => {
+    if (state.playing && state.liveNodes) updateLiveParam(sel.id, sel.value);
+  });
+});
 
 function readAllParams() {
   const p = {};
@@ -844,6 +800,7 @@ function readAllParams() {
   });
   return p;
 }
+
 function applyParams(p) {
   Object.entries(p).forEach(([id, v]) => {
     const el = $(id); if (!el) return;
@@ -854,140 +811,8 @@ function applyParams(p) {
 }
 
 /* ============================================================
-   DSP
+   DSP & RENDU TEMPS RÉEL
    ============================================================ */
-function hann(len) {
-  const w = new Float32Array(len);
-  for (let i = 0; i < len; i++) w[i] = 0.5 * (1 - Math.cos(2*Math.PI*i/(len-1)));
-  return w;
-}
-function resampleLinear(input, ratio) {
-  const outLen = Math.round(input.length / ratio);
-  const out = new Float32Array(outLen);
-  for (let i = 0; i < outLen; i++) {
-    const s = i * ratio;
-    const i0 = Math.floor(s), i1 = Math.min(i0+1, input.length-1), f = s - i0;
-    out[i] = input[i0]*(1-f) + input[i1]*f;
-  }
-  return out;
-}
-function solaStretch(input, factor) {
-  if (Math.abs(factor - 1) < 1e-3) return input;
-  const W = 2048, hopOut = W / 4;
-  const hopIn = Math.max(1, Math.round(hopOut / factor));
-  const outLen = Math.ceil(input.length * factor) + W;
-  const out = new Float32Array(outLen);
-  const win = hann(W);
-  let inPos = 0, outPos = 0;
-  while (inPos + W < input.length && outPos + W < outLen) {
-    for (let i = 0; i < W; i++) out[outPos+i] += input[inPos+i] * win[i];
-    inPos += hopIn; outPos += hopOut;
-  }
-  const norm = new Float32Array(outLen);
-  inPos = 0; outPos = 0;
-  while (inPos + W < input.length && outPos + W < outLen) {
-    for (let i = 0; i < W; i++) norm[outPos+i] += win[i] * win[i];
-    inPos += hopIn; outPos += hopOut;
-  }
-  for (let i = 0; i < outLen; i++) if (norm[i] > 1e-6) out[i] /= norm[i];
-  return out;
-}
-function pitchShift(input, semitones) {
-  if (Math.abs(semitones) < 0.01) return input;
-  const ratio = Math.pow(2, semitones/12);
-  const stretched = solaStretch(input, ratio);
-  return resampleLinear(stretched, ratio);
-}
-function detectPitch(frame, sr) {
-  const N = frame.length;
-  let rms = 0;
-  for (let i = 0; i < N; i++) rms += frame[i]*frame[i];
-  rms = Math.sqrt(rms/N);
-  if (rms < 0.01) return -1;
-  const minLag = Math.floor(sr/1000);
-  const maxLag = Math.floor(sr/60);
-  let best = -1, bestCorr = 0;
-  for (let lag = minLag; lag < maxLag; lag++) {
-    let corr = 0, norm = 0;
-    for (let i = 0; i < N - lag; i++) corr += frame[i]*frame[i+lag];
-    for (let i = 0; i < N - lag; i++) norm += frame[i+lag]*frame[i+lag];
-    const c = corr / Math.sqrt(norm + 1e-9);
-    if (c > bestCorr) { bestCorr = c; best = lag; }
-  }
-  if (bestCorr < 0.3) return -1;
-  return sr / best;
-}
-const SCALES = {
-  chromatic: [0,1,2,3,4,5,6,7,8,9,10,11],
-  major: [0,2,4,5,7,9,11],
-  minor: [0,2,3,5,7,8,10],
-  pentatonic: [0,2,4,7,9],
-  'pentatonic-min': [0,3,5,7,10],
-  blues: [0,3,5,6,7,10],
-  dorian: [0,2,3,5,7,9,10],
-  mixolydian: [0,2,4,5,7,9,10],
-};
-function snapToScale(midi, root, scaleName) {
-  const scale = SCALES[scaleName] || SCALES.chromatic;
-  const pc = ((Math.round(midi) - root) % 12 + 12) % 12;
-  let bestDelta = 99;
-  for (const s of scale) {
-    for (const off of [-12, 0, 12]) {
-      const d = s + off - pc;
-      if (Math.abs(d) < Math.abs(bestDelta)) bestDelta = d;
-    }
-  }
-  return midi + bestDelta;
-}
-async function autotuneBuffer(buffer, opts) {
-  const sr = buffer.sampleRate;
-  const strength = opts.strength/100;
-  const root = parseInt(opts.root);
-  const scaleName = opts.mode;
-  const chanData = [];
-  for (let c = 0; c < buffer.numberOfChannels; c++) chanData.push(buffer.getChannelData(c).slice());
-  const outChannels = chanData.map(() => new Float32Array(buffer.length));
-  const W = Math.round(sr * 0.04);
-  const hop = Math.round(W / 2);
-  const win = hann(W);
-  const shiftCache = new Map();
-  for (let c = 0; c < chanData.length; c++) {
-    const data = chanData[c];
-    const out = outChannels[c];
-    const norm = new Float32Array(buffer.length);
-    for (let pos = 0; pos + W < data.length; pos += hop) {
-      const frame = data.subarray(pos, pos + W);
-      const pitch = detectPitch(frame, sr);
-      let shift = 0;
-      if (pitch > 0) {
-        const midi = 69 + 12 * Math.log2(pitch / 440);
-        const target = snapToScale(midi, root, scaleName);
-        shift = (target - midi) * strength;
-        shift = Math.max(-6, Math.min(6, shift));
-      }
-      let chunk = frame;
-      if (Math.abs(shift) > 0.05) {
-        const key = Math.round(shift * 10);
-        if (shiftCache.has(key)) chunk = shiftCache.get(key).subarray(0, W);
-        else {
-          const shifted = pitchShift(frame, shift);
-          const fixed = new Float32Array(W);
-          for (let i = 0; i < W; i++) fixed[i] = shifted[i] || 0;
-          shiftCache.set(key, fixed);
-          chunk = fixed;
-        }
-      }
-      for (let i = 0; i < W; i++) {
-        out[pos+i] += chunk[i] * win[i];
-        norm[pos+i] += win[i];
-      }
-    }
-    for (let i = 0; i < out.length; i++) if (norm[i] > 1e-3) out[i] /= norm[i];
-  }
-  const out = new AudioBuffer({ length: buffer.length, numberOfChannels: buffer.numberOfChannels, sampleRate: sr });
-  for (let c = 0; c < buffer.numberOfChannels; c++) out.getChannelData(c).set(outChannels[c]);
-  return out;
-}
 function makeImpulse(ctx, duration, decay) {
   const rate = ctx.sampleRate, len = Math.round(rate * duration);
   const imp = ctx.createBuffer(2, len, rate);
@@ -1009,379 +834,356 @@ function makeSatCurve(amount, type) {
   return curve;
 }
 
-/* ============================================================
-   CHAÎNES AUDIO
-   ============================================================ */
-function buildVoiceChain(ctx, source, params) {
-  const trim = ctx.createGain(); trim.gain.value = 1;
-  source.connect(trim);
-  let gate = trim;
-  if (params['v-gate-on']) {
-    const comp = ctx.createDynamicsCompressor();
-    comp.threshold.value = parseFloat(params['v-gate-thr']);
-    comp.ratio.value = parseFloat(params['v-gate-ratio']);
-    comp.attack.value = 0.001; comp.release.value = 0.05; comp.knee.value = 0;
-    trim.connect(comp); gate = comp;
-  }
-  const hpf = ctx.createBiquadFilter();
-  hpf.type = 'highpass'; hpf.frequency.value = parseFloat(params['v-hpf']);
-  hpf.Q.value = 0.707;
-  gate.connect(hpf);
-  const lowShelf = ctx.createBiquadFilter();
-  lowShelf.type = 'lowshelf'; lowShelf.frequency.value = 200;
-  lowShelf.gain.value = parseFloat(params['v-eq-l']);
-  const lowMid = ctx.createBiquadFilter();
-  lowMid.type = 'peaking'; lowMid.frequency.value = 500; lowMid.Q.value = 1;
-  lowMid.gain.value = parseFloat(params['v-eq-lm']);
-  const highMid = ctx.createBiquadFilter();
-  highMid.type = 'peaking'; highMid.frequency.value = 2500; highMid.Q.value = 1;
-  highMid.gain.value = parseFloat(params['v-eq-hm']);
-  const highShelf = ctx.createBiquadFilter();
-  highShelf.type = 'highshelf'; highShelf.frequency.value = 8000;
-  highShelf.gain.value = parseFloat(params['v-eq-h']);
-  hpf.connect(lowShelf); lowShelf.connect(lowMid); lowMid.connect(highMid); highMid.connect(highShelf);
-  let afterDeess = highShelf;
-  const deessAmt = parseFloat(params['v-deess']) / 100;
-  if (deessAmt > 0.01) {
-    const dc = ctx.createDynamicsCompressor();
-    dc.threshold.value = -20 - deessAmt * 10;
-    dc.ratio.value = 1 + deessAmt * 8;
-    dc.attack.value = 0.001; dc.release.value = 0.05; dc.knee.value = 0;
-    highShelf.connect(dc); afterDeess = dc;
-  }
-  const comp = ctx.createDynamicsCompressor();
-  comp.threshold.value = parseFloat(params['v-c-thr']);
-  comp.ratio.value = parseFloat(params['v-c-ratio']);
-  comp.attack.value = parseFloat(params['v-c-att']) / 1000;
-  comp.release.value = parseFloat(params['v-c-rel']) / 1000;
-  comp.knee.value = parseFloat(params['v-c-knee']);
-  afterDeess.connect(comp);
-  const makeup = ctx.createGain();
-  makeup.gain.value = dbToGain(parseFloat(params['v-c-make']));
-  comp.connect(makeup);
-  let afterSat = makeup;
-  const satAmt = parseFloat(params['v-sat']) / 100;
-  if (satAmt > 0.01) {
-    const shaper = ctx.createWaveShaper();
-    shaper.curve = makeSatCurve(satAmt, params['v-sat-type']);
-    shaper.oversample = '4x';
-    makeup.connect(shaper); afterSat = shaper;
-  }
-  let afterChorus = afterSat;
-  const chorusMix = parseFloat(params['fx-ch-mix'])/100;
-  if (chorusMix > 0.01) {
-    const chorus = ctx.createDelay(0.05); chorus.delayTime.value = 0.02;
-    const lfo = ctx.createOscillator(); lfo.frequency.value = parseFloat(params['fx-ch-rate']);
-    const lfoGain = ctx.createGain(); lfoGain.gain.value = parseFloat(params['fx-ch-depth'])/1000;
-    lfo.connect(lfoGain); lfoGain.connect(chorus.delayTime); lfo.start();
-    const chWet = ctx.createGain(); chWet.gain.value = chorusMix;
-    const chDry = ctx.createGain(); chDry.gain.value = 1;
-    afterSat.connect(chDry); afterSat.connect(chorus); chorus.connect(chWet);
-    const chOut = ctx.createGain();
-    chDry.connect(chOut); chWet.connect(chOut);
-    afterChorus = chOut;
-  }
-  let afterFilter = afterChorus;
-  if (params['fx-filt-type'] !== 'allpass') {
-    const f = ctx.createBiquadFilter();
-    f.type = params['fx-filt-type'];
-    f.frequency.value = parseFloat(params['fx-filt-f']);
-    f.Q.value = parseFloat(params['fx-filt-q']);
-    afterChorus.connect(f); afterFilter = f;
-  }
-  let afterDouble = afterFilter;
-  const dbl = parseFloat(params['v-dbl'])/100;
-  if (dbl > 0.01) {
-    const dly = ctx.createDelay(0.2); dly.delayTime.value = parseFloat(params['v-dbl-t'])/1000;
-    const dGain = ctx.createGain(); dGain.gain.value = dbl * 0.7;
-    afterFilter.connect(dly); dly.connect(dGain);
-    const merge = ctx.createGain();
-    afterFilter.connect(merge); dGain.connect(merge);
-    afterDouble = merge;
-  }
-  const revMix = parseFloat(params['fx-rev-mix'])/100;
-  const revOut = ctx.createGain();
-  if (revMix > 0.001) {
-    const preDly = ctx.createDelay(0.3); preDly.delayTime.value = parseFloat(params['fx-rev-pre'])/1000;
-    const conv = ctx.createConvolver();
-    conv.buffer = makeImpulse(ctx, parseFloat(params['fx-rev-size']), parseFloat(params['fx-rev-damp']));
-    const wet = ctx.createGain(); wet.gain.value = revMix;
-    const dry = ctx.createGain(); dry.gain.value = 1;
-    afterDouble.connect(dry); afterDouble.connect(preDly); preDly.connect(conv); conv.connect(wet);
-    dry.connect(revOut); wet.connect(revOut);
-  } else afterDouble.connect(revOut);
-  const dlyMix = parseFloat(params['fx-dly-mix'])/100;
-  const dlyOut = ctx.createGain();
-  if (dlyMix > 0.001) {
-    const dly = ctx.createDelay(2.0); dly.delayTime.value = parseFloat(params['fx-dly-t'])/1000;
-    const fb = ctx.createGain(); fb.gain.value = parseFloat(params['fx-dly-fb'])/100;
-    const wet = ctx.createGain(); wet.gain.value = dlyMix;
-    const dry = ctx.createGain(); dry.gain.value = 1;
-    revOut.connect(dry); revOut.connect(dly); dly.connect(fb); fb.connect(dly); dly.connect(wet);
-    dry.connect(dlyOut); wet.connect(dlyOut);
-  } else revOut.connect(dlyOut);
-  const panner = ctx.createStereoPanner();
-  panner.pan.value = parseFloat(params['v-pan'])/100;
-  dlyOut.connect(panner);
-  const gain = ctx.createGain();
-  gain.gain.value = dbToGain(parseFloat(params['v-gain']));
-  panner.connect(gain);
-  return gain;
+function buildLiveGraph(ctx) {
+  const params = readAllParams();
+  const nodes = {};
+
+  // === VOIX ===
+  nodes.vIn = ctx.createGain();
+  nodes.vGate = ctx.createDynamicsCompressor();
+  nodes.vGate.threshold.value = parseFloat(params['v-gate-thr']);
+  nodes.vGate.ratio.value = parseFloat(params['v-gate-ratio']);
+  nodes.vGate.attack.value = 0.001; nodes.vGate.release.value = 0.05; nodes.vGate.knee.value = 0;
+  
+  nodes.vHpf = ctx.createBiquadFilter(); nodes.vHpf.type = 'highpass';
+  nodes.vHpf.frequency.value = parseFloat(params['v-hpf']); nodes.vHpf.Q.value = 0.707;
+  
+  nodes.vLowShelf = ctx.createBiquadFilter(); nodes.vLowShelf.type = 'lowshelf'; nodes.vLowShelf.frequency.value = 200;
+  nodes.vLowMid = ctx.createBiquadFilter(); nodes.vLowMid.type = 'peaking'; nodes.vLowMid.frequency.value = 500; nodes.vLowMid.Q.value = 1;
+  nodes.vHighMid = ctx.createBiquadFilter(); nodes.vHighMid.type = 'peaking'; nodes.vHighMid.frequency.value = 2500; nodes.vHighMid.Q.value = 1;
+  nodes.vHighShelf = ctx.createBiquadFilter(); nodes.vHighShelf.type = 'highshelf'; nodes.vHighShelf.frequency.value = 8000;
+  
+  nodes.vDeess = ctx.createDynamicsCompressor();
+  nodes.vDeess.threshold.value = -20; nodes.vDeess.ratio.value = 1; nodes.vDeess.attack.value = 0.001; nodes.vDeess.release.value = 0.05; nodes.vDeess.knee.value = 0;
+  
+  nodes.vComp = ctx.createDynamicsCompressor();
+  nodes.vComp.threshold.value = parseFloat(params['v-c-thr']);
+  nodes.vComp.ratio.value = parseFloat(params['v-c-ratio']);
+  nodes.vComp.attack.value = parseFloat(params['v-c-att'])/1000;
+  nodes.vComp.release.value = parseFloat(params['v-c-rel'])/1000;
+  nodes.vComp.knee.value = parseFloat(params['v-c-knee']);
+  
+  nodes.vMakeup = ctx.createGain(); nodes.vMakeup.gain.value = dbToGain(parseFloat(params['v-c-make']));
+  
+  nodes.vSat = ctx.createWaveShaper(); nodes.vSat.curve = makeSatCurve(parseFloat(params['v-sat'])/100, params['v-sat-type']); nodes.vSat.oversample = '4x';
+  
+  // Chorus
+  nodes.vChorusDelay = ctx.createDelay(0.05); nodes.vChorusDelay.delayTime.value = 0.02;
+  nodes.vChorusLfo = ctx.createOscillator(); nodes.vChorusLfo.frequency.value = parseFloat(params['fx-ch-rate']);
+  nodes.vChorusLfoGain = ctx.createGain(); nodes.vChorusLfoGain.gain.value = parseFloat(params['fx-ch-depth'])/1000;
+  nodes.vChorusLfo.connect(nodes.vChorusLfoGain); nodes.vChorusLfoGain.connect(nodes.vChorusDelay.delayTime); nodes.vChorusLfo.start();
+  nodes.vChorusWet = ctx.createGain(); nodes.vChorusWet.gain.value = parseFloat(params['fx-ch-mix'])/100;
+  nodes.vChorusDry = ctx.createGain(); nodes.vChorusDry.gain.value = 1;
+  
+  // Filtre créatif
+  nodes.vFilter = ctx.createBiquadFilter(); nodes.vFilter.type = params['fx-filt-type'];
+  nodes.vFilter.frequency.value = parseFloat(params['fx-filt-f']); nodes.vFilter.Q.value = parseFloat(params['fx-filt-q']);
+  
+  // Doubling
+  nodes.vDblDelay = ctx.createDelay(0.2); nodes.vDblDelay.delayTime.value = parseFloat(params['v-dbl-t'])/1000;
+  nodes.vDblGain = ctx.createGain(); nodes.vDblGain.gain.value = (parseFloat(params['v-dbl'])/100) * 0.7;
+  nodes.vDblMerge = ctx.createGain();
+  
+  // Réverbe
+  nodes.vRevPre = ctx.createDelay(0.3); nodes.vRevPre.delayTime.value = parseFloat(params['fx-rev-pre'])/1000;
+  nodes.vRevConv = ctx.createConvolver(); nodes.vRevConv.buffer = makeImpulse(ctx, parseFloat(params['fx-rev-size']), parseFloat(params['fx-rev-damp']));
+  nodes.vRevWet = ctx.createGain(); nodes.vRevWet.gain.value = parseFloat(params['fx-rev-mix'])/100;
+  nodes.vRevDry = ctx.createGain(); nodes.vRevDry.gain.value = 1;
+  nodes.vRevOut = ctx.createGain();
+  
+  // Delay
+  nodes.vDly = ctx.createDelay(2.0); nodes.vDly.delayTime.value = parseFloat(params['fx-dly-t'])/1000;
+  nodes.vDlyFb = ctx.createGain(); nodes.vDlyFb.gain.value = parseFloat(params['fx-dly-fb'])/100;
+  nodes.vDlyWet = ctx.createGain(); nodes.vDlyWet.gain.value = parseFloat(params['fx-dly-mix'])/100;
+  nodes.vDlyDry = ctx.createGain(); nodes.vDlyDry.gain.value = 1;
+  nodes.vDlyOut = ctx.createGain();
+  
+  // Pan & Gain
+  nodes.vPan = ctx.createStereoPanner(); nodes.vPan.pan.value = parseFloat(params['v-pan'])/100;
+  nodes.vGain = ctx.createGain(); nodes.vGain.gain.value = dbToGain(parseFloat(params['v-gain']));
+
+  // Connexions Voix
+  nodes.vIn.connect(nodes.vGate); nodes.vGate.connect(nodes.vHpf);
+  nodes.vHpf.connect(nodes.vLowShelf); nodes.vLowShelf.connect(nodes.vLowMid); nodes.vLowMid.connect(nodes.vHighMid); nodes.vHighMid.connect(nodes.vHighShelf);
+  nodes.vHighShelf.connect(nodes.vDeess); nodes.vDeess.connect(nodes.vComp); nodes.vComp.connect(nodes.vMakeup); nodes.vMakeup.connect(nodes.vSat);
+  nodes.vSat.connect(nodes.vChorusDry); nodes.vSat.connect(nodes.vChorusDelay); nodes.vChorusDelay.connect(nodes.vChorusWet);
+  const vChorusOut = ctx.createGain(); nodes.vChorusDry.connect(vChorusOut); nodes.vChorusWet.connect(vChorusOut);
+  vChorusOut.connect(nodes.vFilter);
+  nodes.vFilter.connect(nodes.vDblMerge);
+  nodes.vFilter.connect(nodes.vDblDelay); nodes.vDblDelay.connect(nodes.vDblGain); nodes.vDblGain.connect(nodes.vDblMerge);
+  nodes.vDblMerge.connect(nodes.vRevDry); nodes.vDblMerge.connect(nodes.vRevPre); nodes.vRevPre.connect(nodes.vRevConv); nodes.vRevConv.connect(nodes.vRevWet);
+  nodes.vRevDry.connect(nodes.vRevOut); nodes.vRevWet.connect(nodes.vRevOut);
+  nodes.vRevOut.connect(nodes.vDlyDry); nodes.vRevOut.connect(nodes.vDly);
+  nodes.vDly.connect(nodes.vDlyFb); nodes.vDlyFb.connect(nodes.vDly); nodes.vDly.connect(nodes.vDlyWet);
+  nodes.vDlyDry.connect(nodes.vDlyOut); nodes.vDlyWet.connect(nodes.vDlyOut);
+  nodes.vDlyOut.connect(nodes.vPan); nodes.vPan.connect(nodes.vGain);
+
+  // === INSTRU ===
+  nodes.iIn = ctx.createGain();
+  nodes.iHpf = ctx.createBiquadFilter(); nodes.iHpf.type = 'highpass'; nodes.iHpf.frequency.value = parseFloat(params['i-hpf']);
+  nodes.iLowShelf = ctx.createBiquadFilter(); nodes.iLowShelf.type = 'lowshelf'; nodes.iLowShelf.frequency.value = 200;
+  nodes.iMid = ctx.createBiquadFilter(); nodes.iMid.type = 'peaking'; nodes.iMid.frequency.value = 1500; nodes.iMid.Q.value = 0.8;
+  nodes.iHighShelf = ctx.createBiquadFilter(); nodes.iHighShelf.type = 'highshelf'; nodes.iHighShelf.frequency.value = 8000;
+  nodes.iGain = ctx.createGain(); nodes.iGain.gain.value = dbToGain(parseFloat(params['i-gain']));
+  nodes.iPan = ctx.createStereoPanner(); nodes.iPan.pan.value = parseFloat(params['i-pan'])/100;
+
+  nodes.iIn.connect(nodes.iHpf); nodes.iHpf.connect(nodes.iLowShelf); nodes.iLowShelf.connect(nodes.iMid); nodes.iMid.connect(nodes.iHighShelf);
+  nodes.iHighShelf.connect(nodes.iGain); nodes.iGain.connect(nodes.iPan);
+
+  // === ADLIBS ===
+  nodes.aIn = ctx.createGain();
+  nodes.aGain = ctx.createGain(); nodes.aGain.gain.value = dbToGain(parseFloat(params['a-gain']));
+  nodes.aPan = ctx.createStereoPanner(); nodes.aPan.pan.value = parseFloat(params['a-pan'])/100;
+  nodes.aRevConv = ctx.createConvolver(); nodes.aRevConv.buffer = makeImpulse(ctx, 2, 2);
+  nodes.aRevWet = ctx.createGain(); nodes.aRevWet.gain.value = parseFloat(params['a-rev'])/100;
+  nodes.aRevDry = ctx.createGain(); nodes.aRevDry.gain.value = 1;
+  nodes.aOut = ctx.createGain();
+
+  nodes.aIn.connect(nodes.aGain); nodes.aGain.connect(nodes.aPan);
+  nodes.aPan.connect(nodes.aRevDry); nodes.aPan.connect(nodes.aRevConv); nodes.aRevConv.connect(nodes.aRevWet);
+  nodes.aRevDry.connect(nodes.aOut); nodes.aRevWet.connect(nodes.aOut);
+
+  // === MASTER ===
+  nodes.masterIn = ctx.createGain();
+  nodes.mLowShelf = ctx.createBiquadFilter(); nodes.mLowShelf.type = 'lowshelf'; nodes.mLowShelf.frequency.value = 120;
+  nodes.mMid = ctx.createBiquadFilter(); nodes.mMid.type = 'peaking'; nodes.mMid.frequency.value = 1000; nodes.mMid.Q.value = 0.7;
+  nodes.mHighShelf = ctx.createBiquadFilter(); nodes.mHighShelf.type = 'highshelf'; nodes.mHighShelf.frequency.value = 8000;
+  
+  nodes.mComp = ctx.createDynamicsCompressor();
+  nodes.mComp.threshold.value = parseFloat(params['m-c-thr']);
+  nodes.mComp.ratio.value = parseFloat(params['m-c-ratio']);
+  nodes.mComp.attack.value = parseFloat(params['m-c-att'])/1000;
+  nodes.mComp.release.value = parseFloat(params['m-c-rel'])/1000;
+  nodes.mComp.knee.value = parseFloat(params['m-c-knee']);
+  nodes.mMakeup = ctx.createGain(); nodes.mMakeup.gain.value = dbToGain(parseFloat(params['m-c-make']));
+
+  nodes.mSat = ctx.createWaveShaper(); nodes.mSat.curve = makeSatCurve(parseFloat(params['m-sat'])/100, 'soft'); nodes.mSat.oversample = '4x';
+  
+  nodes.mLimiter = ctx.createDynamicsCompressor();
+  nodes.mLimiter.threshold.value = parseFloat(params['m-lim-thr']);
+  nodes.mLimiter.ratio.value = 20; nodes.mLimiter.attack.value = 0.001;
+  nodes.mLimiter.release.value = parseFloat(params['m-lim-rel'])/1000;
+  nodes.mLimiter.knee.value = 0;
+  
+  nodes.mOut = ctx.createGain();
+
+  nodes.masterIn.connect(nodes.mLowShelf); nodes.mLowShelf.connect(nodes.mMid); nodes.mMid.connect(nodes.mHighShelf);
+  nodes.mHighShelf.connect(nodes.mComp); nodes.mComp.connect(nodes.mMakeup); nodes.mMakeup.connect(nodes.mSat);
+  nodes.mSat.connect(nodes.mLimiter); nodes.mLimiter.connect(nodes.mOut);
+  nodes.mOut.connect(ctx.destination);
+
+  // Connecter Voix / Instru / Adlibs au Master
+  nodes.vGain.connect(nodes.masterIn);
+  nodes.iPan.connect(nodes.masterIn);
+  nodes.aOut.connect(nodes.masterIn);
+
+  return nodes;
 }
-function buildInstChain(ctx, source, params) {
-  const hpf = ctx.createBiquadFilter();
-  hpf.type = 'highpass'; hpf.frequency.value = parseFloat(params['i-hpf']);
-  const ls = ctx.createBiquadFilter();
-  ls.type = 'lowshelf'; ls.frequency.value = 200; ls.gain.value = parseFloat(params['i-eq-l']);
-  const mid = ctx.createBiquadFilter();
-  mid.type = 'peaking'; mid.frequency.value = 1500; mid.Q.value = 0.8; mid.gain.value = parseFloat(params['i-eq-m']);
-  const hs = ctx.createBiquadFilter();
-  hs.type = 'highshelf'; hs.frequency.value = 8000; hs.gain.value = parseFloat(params['i-eq-h']);
-  source.connect(hpf); hpf.connect(ls); ls.connect(mid); mid.connect(hs);
-  const gain = ctx.createGain();
-  gain.gain.value = dbToGain(parseFloat(params['i-gain']));
-  hs.connect(gain);
-  const panner = ctx.createStereoPanner();
-  panner.pan.value = parseFloat(params['i-pan'])/100;
-  gain.connect(panner);
-  return panner;
+
+function updateLiveParam(id, val) {
+  const n = state.liveNodes; if (!n) return;
+  try {
+    switch (id) {
+      case 'v-gain': n.vGain.gain.value = dbToGain(val); break;
+      case 'v-pan': n.vPan.pan.value = val/100; break;
+      case 'v-gate-on': break;
+      case 'v-gate-thr': n.vGate.threshold.value = val; break;
+      case 'v-gate-ratio': n.vGate.ratio.value = val; break;
+      case 'v-eq-l': n.vLowShelf.gain.value = val; break;
+      case 'v-eq-lm': n.vLowMid.gain.value = val; break;
+      case 'v-eq-hm': n.vHighMid.gain.value = val; break;
+      case 'v-eq-h': n.vHighShelf.gain.value = val; break;
+      case 'v-hpf': n.vHpf.frequency.value = val; break;
+      case 'v-deess': n.vDeess.ratio.value = 1 + (val/100)*8; n.vDeess.threshold.value = -20 - (val/100)*10; break;
+      case 'v-c-thr': n.vComp.threshold.value = val; break;
+      case 'v-c-ratio': n.vComp.ratio.value = val; break;
+      case 'v-c-att': n.vComp.attack.value = val/1000; break;
+      case 'v-c-rel': n.vComp.release.value = val/1000; break;
+      case 'v-c-knee': n.vComp.knee.value = val; break;
+      case 'v-c-make': n.vMakeup.gain.value = dbToGain(val); break;
+      case 'v-sat': n.vSat.curve = makeSatCurve(val/100, $('v-sat-type').value); break;
+      case 'v-sat-type': n.vSat.curve = makeSatCurve(parseFloat($('v-sat').value)/100, val); break;
+      case 'v-dbl': n.vDblGain.gain.value = (val/100)*0.7; break;
+      case 'v-dbl-t': n.vDblDelay.delayTime.value = val/1000; break;
+      case 'fx-ch-rate': n.vChorusLfo.frequency.value = val; break;
+      case 'fx-ch-depth': n.vChorusLfoGain.gain.value = val/1000; break;
+      case 'fx-ch-mix': n.vChorusWet.gain.value = val/100; break;
+      case 'fx-filt-f': n.vFilter.frequency.value = val; break;
+      case 'fx-filt-q': n.vFilter.Q.value = val; break;
+      case 'fx-filt-type': n.vFilter.type = val; break;
+      case 'fx-rev-mix': n.vRevWet.gain.value = val/100; break;
+      case 'fx-rev-pre': n.vRevPre.delayTime.value = val/1000; break;
+      case 'fx-dly-t': n.vDly.delayTime.value = val/1000; break;
+      case 'fx-dly-fb': n.vDlyFb.gain.value = val/100; break;
+      case 'fx-dly-mix': n.vDlyWet.gain.value = val/100; break;
+      
+      case 'i-gain': n.iGain.gain.value = dbToGain(val); break;
+      case 'i-pan': n.iPan.pan.value = val/100; break;
+      case 'i-eq-l': n.iLowShelf.gain.value = val; break;
+      case 'i-eq-m': n.iMid.gain.value = val; break;
+      case 'i-eq-h': n.iHighShelf.gain.value = val; break;
+      case 'i-hpf': n.iHpf.frequency.value = val; break;
+      
+      case 'a-gain': n.aGain.gain.value = dbToGain(val); break;
+      case 'a-pan': n.aPan.pan.value = val/100; break;
+      case 'a-rev': n.aRevWet.gain.value = val/100; break;
+
+      case 'm-eq-l': n.mLowShelf.gain.value = val; break;
+      case 'm-eq-m': n.mMid.gain.value = val; break;
+      case 'm-eq-h': n.mHighShelf.gain.value = val; break;
+      case 'm-c-thr': n.mComp.threshold.value = val; break;
+      case 'm-c-ratio': n.mComp.ratio.value = val; break;
+      case 'm-c-att': n.mComp.attack.value = val/1000; break;
+      case 'm-c-rel': n.mComp.release.value = val/1000; break;
+      case 'm-c-knee': n.mComp.knee.value = val; break;
+      case 'm-c-make': n.mMakeup.gain.value = dbToGain(val); break;
+      case 'm-sat': n.mSat.curve = makeSatCurve(val/100, 'soft'); break;
+      case 'm-lim-thr': n.mLimiter.threshold.value = val; break;
+      case 'm-lim-rel': n.mLimiter.release.value = val/1000; break;
+    }
+  } catch(e) { console.warn('Live update error:', id, e); }
 }
-function buildAdlibChain(ctx, source, params) {
-  const gain = ctx.createGain();
-  gain.gain.value = dbToGain(parseFloat(params['a-gain']));
-  source.connect(gain);
-  const panner = ctx.createStereoPanner();
-  panner.pan.value = parseFloat(params['a-pan'])/100;
-  gain.connect(panner);
-  const revAmt = parseFloat(params['a-rev'])/100;
-  const out = ctx.createGain();
-  if (revAmt > 0.01) {
-    const conv = ctx.createConvolver();
-    conv.buffer = makeImpulse(ctx, 2, 2);
-    const wet = ctx.createGain(); wet.gain.value = revAmt;
-    const dry = ctx.createGain(); dry.gain.value = 1;
-    panner.connect(dry); panner.connect(conv); conv.connect(wet);
-    dry.connect(out); wet.connect(out);
-  } else panner.connect(out);
+
+// ---- Pré-calcul Autotune ----
+function hann(len) { const w = new Float32Array(len); for (let i=0; i<len; i++) w[i] = 0.5*(1-Math.cos(2*Math.PI*i/(len-1))); return w; }
+function resampleLinear(input, ratio) { const o = Math.round(input.length/ratio), out = new Float32Array(o); for (let i=0; i<o; i++) { const s=i*ratio, i0=Math.floor(s), i1=Math.min(i0+1, input.length-1), f=s-i0; out[i]=input[i0]*(1-f)+input[i1]*f; } return out; }
+function solaStretch(input, factor) { if (Math.abs(factor-1)<1e-3) return input; const W=2048, hO=W/4, hI=Math.max(1,Math.round(hO/factor)), oL=Math.ceil(input.length*factor)+W, out=new Float32Array(oL), win=hann(W); let iP=0, oP=0; while(iP+W<input.length&&oP+W<oL){ for(let i=0;i<W;i++) out[oP+i]+=input[iP+i]*win[i]; iP+=hI; oP+=hO; } const n=new Float32Array(oL); iP=0; oP=0; while(iP+W<input.length&&oP+W<oL){ for(let i=0;i<W;i++) n[oP+i]+=win[i]*win[i]; iP+=hI; oP+=hO; } for(let i=0;i<oL;i++) if(n[i]>1e-6) out[i]/=n[i]; return out; }
+function pitchShift(input, st) { if(Math.abs(st)<0.01) return input; const r=Math.pow(2,st/12); return resampleLinear(solaStretch(input,r),r); }
+function detectPitch(f, sr) { const N=f.length; let r=0; for(let i=0;i<N;i++) r+=f[i]*f[i]; r=Math.sqrt(r/N); if(r<0.01) return -1; const mL=Math.floor(sr/1000), xL=Math.floor(sr/60); let b=-1, bC=0; for(let l=mL;l<xL;l++){ let c=0, n=0; for(let i=0;i<N-l;i++) c+=f[i]*f[i+l]; for(let i=0;i<N-l;i++) n+=f[i+l]*f[i+l]; const cc=c/Math.sqrt(n+1e-9); if(cc>bC){bC=cc; b=l;} } return bC<0.3 ? -1 : sr/b; }
+const SCALES = { chromatic:[0,1,2,3,4,5,6,7,8,9,10,11], major:[0,2,4,5,7,9,11], minor:[0,2,3,5,7,8,10], pentatonic:[0,2,4,7,9], 'pentatonic-min':[0,3,5,7,10], blues:[0,3,5,6,7,10], dorian:[0,2,3,5,7,9,10], mixolydian:[0,2,4,5,7,9,10] };
+function snapToScale(midi, root, scaleName) { const sc=SCALES[scaleName]||SCALES.chromatic, pc=((Math.round(midi)-root)%12+12)%12; let bD=99; for(const s of sc){ for(const off of [-12,0,12]){ const d=s+off-pc; if(Math.abs(d)<Math.abs(bD)) bD=d; } } return midi+bD; }
+
+async function autotuneBuffer(buffer, opts) {
+  const sr = buffer.sampleRate, strength = opts.strength/100, root = parseInt(opts.root), scaleName = opts.mode;
+  const chanData = []; for (let c = 0; c < buffer.numberOfChannels; c++) chanData.push(buffer.getChannelData(c).slice());
+  const outChannels = chanData.map(() => new Float32Array(buffer.length));
+  const W = Math.round(sr * 0.04), hop = Math.round(W / 2), win = hann(W), shiftCache = new Map();
+  for (let c = 0; c < chanData.length; c++) {
+    const data = chanData[c], out = outChannels[c], norm = new Float32Array(buffer.length);
+    for (let pos = 0; pos + W < data.length; pos += hop) {
+      const frame = data.subarray(pos, pos + W), pitch = detectPitch(frame, sr);
+      let shift = 0;
+      if (pitch > 0) {
+        const midi = 69 + 12 * Math.log2(pitch / 440);
+        shift = (snapToScale(midi, root, scaleName) - midi) * strength;
+        shift = Math.max(-6, Math.min(6, shift));
+      }
+      let chunk = frame;
+      if (Math.abs(shift) > 0.05) {
+        const key = Math.round(shift * 10);
+        if (shiftCache.has(key)) chunk = shiftCache.get(key).subarray(0, W);
+        else { const shifted = pitchShift(frame, shift), fixed = new Float32Array(W); for (let i = 0; i < W; i++) fixed[i] = shifted[i] || 0; shiftCache.set(key, fixed); chunk = fixed; }
+      }
+      for (let i = 0; i < W; i++) { out[pos+i] += chunk[i] * win[i]; norm[pos+i] += win[i]; }
+    }
+    for (let i = 0; i < out.length; i++) if (norm[i] > 1e-3) out[i] /= norm[i];
+  }
+  const out = new AudioBuffer({ length: buffer.length, numberOfChannels: buffer.numberOfChannels, sampleRate: sr });
+  for (let c = 0; c < buffer.numberOfChannels; c++) out.getChannelData(c).set(outChannels[c]);
   return out;
-}
-function buildMasterChain(ctx, input, params) {
-  const ls = ctx.createBiquadFilter();
-  ls.type = 'lowshelf'; ls.frequency.value = 120; ls.gain.value = parseFloat(params['m-eq-l']);
-  const mid = ctx.createBiquadFilter();
-  mid.type = 'peaking'; mid.frequency.value = 1000; mid.Q.value = 0.7; mid.gain.value = parseFloat(params['m-eq-m']);
-  const hs = ctx.createBiquadFilter();
-  hs.type = 'highshelf'; hs.frequency.value = 8000; hs.gain.value = parseFloat(params['m-eq-h']);
-  input.connect(ls); ls.connect(mid); mid.connect(hs);
-  const comp = ctx.createDynamicsCompressor();
-  comp.threshold.value = parseFloat(params['m-c-thr']);
-  comp.ratio.value = parseFloat(params['m-c-ratio']);
-  comp.attack.value = parseFloat(params['m-c-att'])/1000;
-  comp.release.value = parseFloat(params['m-c-rel'])/1000;
-  comp.knee.value = parseFloat(params['m-c-knee']);
-  hs.connect(comp);
-  const makeup = ctx.createGain();
-  makeup.gain.value = dbToGain(parseFloat(params['m-c-make']));
-  comp.connect(makeup);
-  const width = parseFloat(params['m-width'])/100;
-  const splitter = ctx.createChannelSplitter(2);
-  const merger = ctx.createChannelMerger(2);
-  const midGain = ctx.createGain(); midGain.gain.value = 1;
-  const sideGain = ctx.createGain(); sideGain.gain.value = width;
-  makeup.connect(splitter);
-  const mL = ctx.createGain(); mL.gain.value = 0.5;
-  const mR = ctx.createGain(); mR.gain.value = 0.5;
-  const sL = ctx.createGain(); sL.gain.value = 0.5;
-  const sR = ctx.createGain(); sR.gain.value = -0.5;
-  splitter.connect(mL, 0); splitter.connect(mR, 1);
-  splitter.connect(sL, 0); splitter.connect(sR, 1);
-  const mSum = ctx.createGain(); const sSum = ctx.createGain();
-  mL.connect(mSum); mR.connect(mSum); sL.connect(sSum); sR.connect(sSum);
-  mSum.connect(midGain); sSum.connect(sideGain);
-  const recL = ctx.createGain(); const recR = ctx.createGain();
-  midGain.connect(recL); sideGain.connect(recL);
-  midGain.connect(recR);
-  const invSide = ctx.createGain(); invSide.gain.value = -1;
-  sideGain.connect(invSide); invSide.connect(recR);
-  recL.connect(merger, 0, 0); recR.connect(merger, 0, 1);
-  let afterSat = merger;
-  const satAmt = parseFloat(params['m-sat'])/100;
-  if (satAmt > 0.01) {
-    const shaper = ctx.createWaveShaper();
-    shaper.curve = makeSatCurve(satAmt, 'soft');
-    shaper.oversample = '4x';
-    merger.connect(shaper); afterSat = shaper;
-  }
-  let afterLim = afterSat;
-  if (params['m-lim-on']) {
-    const lim = ctx.createDynamicsCompressor();
-    lim.threshold.value = parseFloat(params['m-lim-thr']);
-    lim.ratio.value = 20; lim.attack.value = 0.001;
-    lim.release.value = parseFloat(params['m-lim-rel'])/1000;
-    lim.knee.value = 0;
-    afterSat.connect(lim); afterLim = lim;
-  }
-  return afterLim;
 }
 
 /* ============================================================
-   RENDU OFFLINE
+   MOTEUR DE LECTURE (TEMPS RÉEL)
    ============================================================ */
-async function renderMix(which = 'full') {
-  const sr = parseInt($('ex-sr').value);
-  if (!state.voice && !state.inst && !state.adlib) { status('Aucun fichier chargé.', 'err'); return null; }
+async function playMix(startTime = 0) {
+  if (state.playing) return;
+  state.playing = true;
+
+  if (!state.ctx) state.ctx = new (window.AudioContext || window.webkitAudioContext)();
+  if (state.ctx.state === 'suspended') await state.ctx.resume();
+
   let voiceBuf = state.voice;
-  if (which !== 'inst' && voiceBuf && $('at-on').checked) {
-    status('Autotune en cours…');
-    progress(0.1);
+  if (voiceBuf && $('at-on').checked) {
+    status('Calcul Autotune en cours… (Patientez)');
+    progress(0.2);
     voiceBuf = await autotuneBuffer(voiceBuf, {
       strength: parseFloat($('at-strength').value),
       root: $('at-root').value,
-      mode: $('at-mode').value,
+      mode: $('at-mode').value
     });
     state.voiceOut = voiceBuf;
-    progress(0.4);
-  } else if (state.voiceOut) voiceBuf = state.voiceOut;
+    progress(0.8);
+  } else if (state.voiceOut) {
+    voiceBuf = state.voiceOut;
+  }
+
+  if (!state.playing) return;
+
+  state.liveNodes = buildLiveGraph(state.ctx);
+  
+  const sources = [];
+  const startTimeOffset = startTime;
+
+  if (voiceBuf && $('m-voice').checked) {
+    const src = state.ctx.createBufferSource(); src.buffer = voiceBuf;
+    src.connect(state.liveNodes.vIn);
+    src.start(0, startTimeOffset);
+    sources.push(src);
+  }
+
+  if (state.inst && $('m-inst').checked) {
+    const src = state.ctx.createBufferSource(); src.buffer = state.inst;
+    src.connect(state.liveNodes.iIn);
+    src.start(0, startTimeOffset);
+    sources.push(src);
+  }
+
+  if (state.adlib && $('m-adlib').checked) {
+    const src = state.ctx.createBufferSource(); src.buffer = state.adlib;
+    src.connect(state.liveNodes.aIn);
+    src.start(0, startTimeOffset);
+    sources.push(src);
+  }
+
+  if (sources.length === 0) {
+    state.playing = false;
+    status('Aucune piste active à lire.', 'warn');
+    return;
+  }
+
+  state.sources = sources;
+  
+  state.analyser = state.ctx.createAnalyser();
+  state.analyser.fftSize = 2048;
+  state.liveNodes.mOut.connect(state.analyser);
+  state.analyser.connect(state.ctx.destination);
+
   const maxDur = Math.max(voiceBuf?.duration || 0, state.inst?.duration || 0, state.adlib?.duration || 0);
-  const length = Math.ceil(maxDur * sr);
-  status('Rendu du mix…');
-  progress(0.5);
-  const ctx = new OfflineAudioContext(2, length, sr);
-  const params = readAllParams();
-  const masterIn = ctx.createGain();
-  if (which !== 'inst' && voiceBuf && $('m-voice').checked) {
-    const src = ctx.createBufferSource(); src.buffer = voiceBuf;
-    const chain = buildVoiceChain(ctx, src, params);
-    chain.connect(masterIn);
-    src.start(0);
-    const h1 = parseInt(params['v-h1']), h2 = parseInt(params['v-h2']);
-    if (h1 !== 0 && voiceBuf.duration < 300) {
-      const data = voiceBuf.getChannelData(0);
-      const shifted = pitchShift(data, h1);
-      const hbuf = ctx.createBuffer(1, shifted.length, sr);
-      hbuf.copyToChannel(shifted, 0);
-      const hsrc = ctx.createBufferSource(); hsrc.buffer = hbuf;
-      const hg = ctx.createGain(); hg.gain.value = 0.3;
-      hsrc.connect(hg); hg.connect(masterIn); hsrc.start(0);
-    }
-    if (h2 !== 0 && voiceBuf.duration < 300) {
-      const data = voiceBuf.getChannelData(0);
-      const shifted = pitchShift(data, h2);
-      const hbuf = ctx.createBuffer(1, shifted.length, sr);
-      hbuf.copyToChannel(shifted, 0);
-      const hsrc = ctx.createBufferSource(); hsrc.buffer = hbuf;
-      const hg = ctx.createGain(); hg.gain.value = 0.25;
-      hsrc.connect(hg); hg.connect(masterIn); hsrc.start(0);
-    }
+  sources[0].onended = () => {
+    if (state.playing) stopMix();
+  };
+
+  state.startOffset = startTimeOffset;
+  state.startCtxTime = state.ctx.currentTime;
+  
+  status('Lecture en cours · Temps réel actif.', 'ok');
+  progress(null);
+  $('btnPlay').textContent = '⏸ Pause';
+  
+  startMeterLoop();
+  startSpectrumLoop();
+  startPlayheadLoop();
+}
+
+function stopMix() {
+  state.sources.forEach(src => { try { src.stop(); src.disconnect(); } catch(e){} });
+  state.sources = [];
+  
+  if (state.liveNodes) {
+    try { state.liveNodes.mOut.disconnect(); } catch(e){}
+    state.liveNodes = null;
   }
-  if (which !== 'voice' && state.inst && $('m-inst').checked) {
-    const src = ctx.createBufferSource(); src.buffer = state.inst;
-    const chain = buildInstChain(ctx, src, params);
-    chain.connect(masterIn); src.start(0);
-  }
-  if (which === 'full' && state.adlib && $('m-adlib').checked) {
-    const src = ctx.createBufferSource(); src.buffer = state.adlib;
-    const chain = buildAdlibChain(ctx, src, params);
-    chain.connect(masterIn); src.start(0);
-  }
-  const masterOut = buildMasterChain(ctx, masterIn, params);
-  masterOut.connect(ctx.destination);
-  progress(0.7);
-  let rendered = await ctx.startRendering();
-  progress(0.9);
-  const target = parseFloat(params['m-lufs']);
-  rendered = normalizeToLufs(rendered, target);
-  progress(1);
-  setTimeout(() => progress(null), 600);
-  state.render = rendered;
-  drawWaveform('waveform', rendered);
-  return rendered;
+
+  state.playing = false;
+  $('btnPlay').textContent = '▶ Play';
+  stopMeterLoop(); stopSpectrumLoop(); stopPlayheadLoop();
+  drawWaveformAll();
+  status('Lecture arrêtée.', '');
 }
 
 /* ============================================================
-   LUFS (BS.1770)
-   ============================================================ */
-function kWeight(input) {
-  const b1 = [1.53512485958697, -2.69169618940638, 1.19839281085285];
-  const a1 = [1, -1.69065929318241, 0.73248077421585];
-  const b2 = [1.0, -2.0, 1.0];
-  const a2 = [1, -1.99004745483398, 0.99007225036621];
-  const out = new Float32Array(input.length);
-  let x1=0,x2=0,y1=0,y2=0;
-  for (let i = 0; i < input.length; i++) {
-    const x = input[i];
-    const y = b1[0]*x + b1[1]*x1 + b1[2]*x2 - a1[1]*y1 - a1[2]*y2;
-    x2=x1; x1=x; y2=y1; y1=y;
-    out[i] = y;
-  }
-  x1=x2=y1=y2=0;
-  for (let i = 0; i < out.length; i++) {
-    const x = out[i];
-    const y = b2[0]*x + b2[1]*x1 + b2[2]*x2 - a2[1]*y1 - a2[2]*y2;
-    x2=x1; x1=x; y2=y1; y1=y;
-    out[i] = y;
-  }
-  return out;
-}
-function integratedLufs(buffer) {
-  const sr = buffer.sampleRate;
-  const nCh = buffer.numberOfChannels;
-  const chans = [];
-  for (let c = 0; c < nCh; c++) chans.push(kWeight(buffer.getChannelData(c)));
-  const blockSize = Math.round(sr * 0.4);
-  const hopSize = Math.round(sr * 0.1);
-  const len = buffer.length;
-  const loudness = [];
-  for (let pos = 0; pos + blockSize <= len; pos += hopSize) {
-    let sum = 0;
-    for (let c = 0; c < nCh; c++) {
-      let ms = 0;
-      for (let i = 0; i < blockSize; i++) {
-        const s = chans[c][pos + i];
-        ms += s * s;
-      }
-      sum += ms / blockSize;
-    }
-    const l = -0.691 + 10 * Math.log10(sum + 1e-12);
-    if (l > -70) loudness.push(l);
-  }
-  if (loudness.length === 0) return -70;
-  const mean = loudness.reduce((a, b) => a + Math.pow(10, b / 10), 0) / loudness.length;
-  const threshold = -0.691 + 10 * Math.log10(mean) - 10;
-  const gated = loudness.filter(l => l > threshold);
-  if (gated.length === 0) return -70;
-  const finalMean = gated.reduce((a, b) => a + Math.pow(10, b / 10), 0) / gated.length;
-  return -0.691 + 10 * Math.log10(finalMean);
-}
-function normalizeToLufs(buffer, targetLufs) {
-  const current = integratedLufs(buffer);
-  const gainDb = targetLufs - current;
-  const gain = dbToGain(gainDb);
-  const out = new AudioBuffer({ length: buffer.length, numberOfChannels: buffer.numberOfChannels, sampleRate: buffer.sampleRate });
-  for (let c = 0; c < buffer.numberOfChannels; c++) {
-    const src = buffer.getChannelData(c), dst = out.getChannelData(c);
-    for (let i = 0; i < src.length; i++) dst[i] = Math.max(-1, Math.min(1, src[i] * gain));
-  }
-  return out;
-}
-
-/* ============================================================
-   BOUTONS & UI
-   ============================================================ */
-function updateButtons() {
-  const hasAny = state.voice || state.inst || state.adlib;
-  $('btnRender').disabled = !hasAny;
-  $('btnRenderFull').disabled = !hasAny;
-  $('btnRenderVoice').disabled = !state.voice;
-  $('btnRenderInst').disabled = !state.inst;
-  $('btnPlay').disabled = !hasAny;
-  $('btnStop').disabled = !hasAny;
-  $('btnPreviewDry').disabled = !hasAny;
-  $('btnAnalyze').disabled = !state.voice;
-}
-
-/* ============================================================
-   WAVEFORM & SEEK
+   WAVEFORM & SEEK (Live)
    ============================================================ */
 function drawWaveform(canvasId, buffer) {
   const canvas = $(canvasId); if (!canvas) return;
@@ -1429,7 +1231,6 @@ function drawWaveformAll() {
   drawWaveform('waveform', state.render || state.voice || state.inst);
 }
 
-// Événement unifié pour éviter les doubles déclenchements sur mobile
 const wfCanvas = $('waveform');
 const handleSeek = (e) => {
   const buffer = state.render || state.voice || state.inst;
@@ -1441,72 +1242,13 @@ const handleSeek = (e) => {
   const ratio = Math.max(0, Math.min(1, x / rect.width));
   const time = ratio * buffer.duration;
   
-  stopMix(); // Arrêt forcé et nettoyage
+  stopMix();
   playMix(time);
 };
 wfCanvas.addEventListener('pointerdown', handleSeek);
 
 /* ============================================================
-   LECTURE (Corrigée pour éviter les doubles sons)
-   ============================================================ */
-async function playMix(startTime = 0) {
-  // Le verrou est mis TOUT DE SUITE pour empêcher les doubles clics
-  if (state.playing) return;
-  state.playing = true;
-
-  if (!state.ctx) state.ctx = new (window.AudioContext || window.webkitAudioContext)();
-  if (state.ctx.state === 'suspended') await state.ctx.resume();
-  
-  const buf = state.render || await renderMix('full');
-  if (!buf) { state.playing = false; return; }
-  
-  // Si l'utilisateur a cliqué sur Stop pendant le calcul, on annule
-  if (!state.playing) return;
-
-  const src = state.ctx.createBufferSource();
-  src.buffer = buf;
-  const analyser = state.ctx.createAnalyser();
-  analyser.fftSize = 2048;
-  const gain = state.ctx.createGain();
-  
-  src.connect(analyser); analyser.connect(gain); gain.connect(state.ctx.destination);
-  
-  src.onended = () => { 
-    state.playing = false; 
-    stopMeterLoop(); 
-    stopSpectrumLoop(); 
-    stopPlayheadLoop(); 
-    drawWaveformAll();
-    try { src.disconnect(); gain.disconnect(); } catch(e){}
-  };
-  
-  src.start(0, startTime);
-  
-  state.source = src;
-  state.analyser = analyser;
-  state.startOffset = startTime;
-  state.startCtxTime = state.ctx.currentTime;
-  
-  startMeterLoop();
-  startSpectrumLoop();
-  startPlayheadLoop();
-}
-
-function stopMix() {
-  if (state.source) { 
-    try { state.source.stop(); } catch(e){} 
-    try { state.source.disconnect(); } catch(e){}
-    state.source = null; 
-  }
-  state.playing = false;
-  stopMeterLoop(); 
-  stopSpectrumLoop();
-  stopPlayheadLoop();
-  drawWaveformAll();
-}
-
-/* ============================================================
-   METERS & SPECTRUM & PLAYHEAD LOOPS
+   LOOPS DE VISUALISATION
    ============================================================ */
 let meterRAF = null, spectrumRAF = null, playheadRAF = null;
 
@@ -1523,11 +1265,9 @@ function startMeterLoop() {
       sum += v * v;
     }
     const rms = Math.sqrt(sum / timeData.length);
-    const peakDb = gainToDb(peak);
-    const rmsDb = gainToDb(rms);
-    setMeter('peakL', peakDb); setMeter('peakR', peakDb);
-    setMeter('rmsL', rmsDb); setMeter('rmsR', rmsDb);
-    setMeter('lufs', rmsDb - 3);
+    setMeter('peakL', gainToDb(peak)); setMeter('peakR', gainToDb(peak));
+    setMeter('rmsL', gainToDb(rms)); setMeter('rmsR', gainToDb(rms));
+    setMeter('lufs', gainToDb(rms) - 3);
     setMeter('corr', 1.0, true);
     meterRAF = requestAnimationFrame(loop);
   };
@@ -1561,12 +1301,12 @@ function startSpectrumLoop() {
 
 function startPlayheadLoop() {
   const loop = () => {
-    if (!state.playing || !state.source) return;
-    const buf = state.render || state.voice || state.inst;
-    if (!buf) return;
+    if (!state.playing || state.sources.length === 0) return;
+    const buffer = state.render || state.voice || state.inst;
+    if (!buffer) return;
     const elapsed = state.ctx.currentTime - state.startCtxTime;
     const current = state.startOffset + elapsed;
-    const ratio = Math.min(1, current / buf.duration);
+    const ratio = Math.min(1, current / buffer.duration);
     
     drawPlayhead(ratio);
     
@@ -1596,20 +1336,101 @@ function setMeter(id, db, isCorr = false) {
 }
 
 /* ============================================================
-   EXPORT WAV
+   RENDU OFFLINE (Pour l'export final uniquement)
    ============================================================ */
+async function renderMixOffline(which = 'full') {
+  const sr = parseInt($('ex-sr').value);
+  if (!state.voice && !state.inst && !state.adlib) { status('Aucun fichier chargé.', 'err'); return null; }
+  
+  let voiceBuf = state.voice;
+  if (which !== 'inst' && voiceBuf && $('at-on').checked) {
+    status('Autotune en cours…');
+    progress(0.1);
+    voiceBuf = state.voiceOut || await autotuneBuffer(voiceBuf, {
+      strength: parseFloat($('at-strength').value),
+      root: $('at-root').value,
+      mode: $('at-mode').value,
+    });
+    state.voiceOut = voiceBuf;
+    progress(0.4);
+  }
+
+  const maxDur = Math.max(voiceBuf?.duration || 0, state.inst?.duration || 0, state.adlib?.duration || 0);
+  const length = Math.ceil(maxDur * sr);
+  status('Calcul du rendu final…');
+  progress(0.5);
+
+  const ctx = new OfflineAudioContext(2, length, sr);
+  
+  const origCtx = state.ctx;
+  state.ctx = ctx;
+  const nodes = buildLiveGraph(ctx);
+  state.ctx = origCtx;
+
+  if (which !== 'inst' && voiceBuf && $('m-voice').checked) {
+    const src = ctx.createBufferSource(); src.buffer = voiceBuf; src.connect(nodes.vIn); src.start(0);
+  }
+  if (which !== 'voice' && state.inst && $('m-inst').checked) {
+    const src = ctx.createBufferSource(); src.buffer = state.inst; src.connect(nodes.iIn); src.start(0);
+  }
+  if (which === 'full' && state.adlib && $('m-adlib').checked) {
+    const src = ctx.createBufferSource(); src.buffer = state.adlib; src.connect(nodes.aIn); src.start(0);
+  }
+
+  progress(0.7);
+  let rendered = await ctx.startRendering();
+  
+  const target = parseFloat($('m-lufs').value);
+  rendered = normalizeToLufs(rendered, target);
+  
+  progress(1);
+  setTimeout(() => progress(null), 600);
+  state.render = rendered;
+  drawWaveform('waveform', rendered);
+  return rendered;
+}
+
+function kWeight(input) {
+  const b1 = [1.53512485958697, -2.69169618940638, 1.19839281085285], a1 = [1, -1.69065929318241, 0.73248077421585];
+  const b2 = [1.0, -2.0, 1.0], a2 = [1, -1.99004745483398, 0.99007225036621];
+  const out = new Float32Array(input.length); let x1=0,x2=0,y1=0,y2=0;
+  for (let i = 0; i < input.length; i++) { const x = input[i], y = b1[0]*x + b1[1]*x1 + b1[2]*x2 - a1[1]*y1 - a1[2]*y2; x2=x1; x1=x; y2=y1; y1=y; out[i] = y; }
+  x1=x2=y1=y2=0;
+  for (let i = 0; i < out.length; i++) { const x = out[i], y = b2[0]*x + b2[1]*x1 + b2[2]*x2 - a2[1]*y1 - a2[2]*y2; x2=x1; x1=x; y2=y1; y1=y; out[i] = y; }
+  return out;
+}
+function integratedLufs(buffer) {
+  const sr = buffer.sampleRate, nCh = buffer.numberOfChannels, chans = [];
+  for (let c = 0; c < nCh; c++) chans.push(kWeight(buffer.getChannelData(c)));
+  const blockSize = Math.round(sr * 0.4), hopSize = Math.round(sr * 0.1), len = buffer.length, loudness = [];
+  for (let pos = 0; pos + blockSize <= len; pos += hopSize) {
+    let sum = 0;
+    for (let c = 0; c < nCh; c++) { let ms = 0; for (let i = 0; i < blockSize; i++) { const s = chans[c][pos + i]; ms += s * s; } sum += ms / blockSize; }
+    const l = -0.691 + 10 * Math.log10(sum + 1e-12); if (l > -70) loudness.push(l);
+  }
+  if (loudness.length === 0) return -70;
+  const mean = loudness.reduce((a, b) => a + Math.pow(10, b / 10), 0) / loudness.length;
+  const threshold = -0.691 + 10 * Math.log10(mean) - 10, gated = loudness.filter(l => l > threshold);
+  if (gated.length === 0) return -70;
+  const finalMean = gated.reduce((a, b) => a + Math.pow(10, b / 10), 0) / gated.length;
+  return -0.691 + 10 * Math.log10(finalMean);
+}
+function normalizeToLufs(buffer, targetLufs) {
+  const current = integratedLufs(buffer), gain = dbToGain(targetLufs - current);
+  const out = new AudioBuffer({ length: buffer.length, numberOfChannels: buffer.numberOfChannels, sampleRate: buffer.sampleRate });
+  for (let c = 0; c < buffer.numberOfChannels; c++) {
+    const src = buffer.getChannelData(c), dst = out.getChannelData(c);
+    for (let i = 0; i < src.length; i++) dst[i] = Math.max(-1, Math.min(1, src[i] * gain));
+  }
+  return out;
+}
+
 function encodeWAV(buffer, bitDepth) {
-  const numCh = buffer.numberOfChannels;
-  const sampleRate = buffer.sampleRate;
-  const len = buffer.length;
+  const numCh = buffer.numberOfChannels, sampleRate = buffer.sampleRate, len = buffer.length;
   const bytesPerSample = bitDepth === 16 ? 2 : bitDepth === 24 ? 3 : 4;
-  const blockAlign = numCh * bytesPerSample;
-  const dataSize = len * blockAlign;
-  const headerSize = bitDepth === 32 ? 44 + 12 : 44;
-  const ab = new ArrayBuffer(headerSize + dataSize);
-  const view = new DataView(ab);
-  const isFloat = bitDepth === 32;
-  const format = isFloat ? 3 : 1;
+  const blockAlign = numCh * bytesPerSample, dataSize = len * blockAlign, headerSize = bitDepth === 32 ? 56 : 44;
+  const ab = new ArrayBuffer(headerSize + dataSize), view = new DataView(ab);
+  const isFloat = bitDepth === 32, format = isFloat ? 3 : 1;
   let off = 0;
   const ws = s => { for (let i = 0; i < s.length; i++) view.setUint8(off++, s.charCodeAt(i)); };
   const u32 = v => { view.setUint32(off, v, true); off += 4; };
@@ -1619,49 +1440,46 @@ function encodeWAV(buffer, bitDepth) {
   u32(sampleRate * blockAlign); u16(blockAlign); u16(bitDepth);
   if (isFloat) { ws('fact'); u32(4); u32(len); }
   ws('data'); u32(dataSize);
-  const chans = [];
-  for (let c = 0; c < numCh; c++) chans.push(buffer.getChannelData(c));
+  const chans = []; for (let c = 0; c < numCh; c++) chans.push(buffer.getChannelData(c));
   for (let i = 0; i < len; i++) {
     for (let c = 0; c < numCh; c++) {
       let s = Math.max(-1, Math.min(1, chans[c][i]));
-      if (bitDepth === 16) {
-        view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7FFF, true); off += 2;
-      } else if (bitDepth === 24) {
-        const val = Math.round(s < 0 ? s * 0x800000 : s * 0x7FFFFF);
-        view.setUint8(off, val & 0xFF);
-        view.setUint8(off+1, (val >> 8) & 0xFF);
-        view.setUint8(off+2, (val >> 16) & 0xFF);
-        off += 3;
-      } else {
-        view.setFloat32(off, s, true); off += 4;
-      }
+      if (bitDepth === 16) { view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7FFF, true); off += 2; }
+      else if (bitDepth === 24) { const val = Math.round(s < 0 ? s * 0x800000 : s * 0x7FFFFF); view.setUint8(off, val & 0xFF); view.setUint8(off+1, (val >> 8) & 0xFF); view.setUint8(off+2, (val >> 16) & 0xFF); off += 3; }
+      else { view.setFloat32(off, s, true); off += 4; }
     }
   }
   return ab;
 }
+
 async function downloadRender(which = 'full') {
-  const buf = await renderMix(which);
+  const buf = await renderMixOffline(which);
   if (!buf) return;
-  const bit = parseInt($('ex-bit').value);
-  const wav = encodeWAV(buf, bit);
-  const blob = new Blob([wav], { type: 'audio/wav' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  const base = ($('ex-name').value || 'Beasymix') + (which !== 'full' ? `-${which}` : '');
-  a.download = `${base}.wav`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-  const lufs = integratedLufs(buf).toFixed(1);
-  status(`Exporté (${bit}-bit, LUFS ${lufs}).`, 'ok');
+  const bit = parseInt($('ex-bit').value), wav = encodeWAV(buf, bit), blob = new Blob([wav], { type: 'audio/wav' }), url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; const base = ($('ex-name').value || 'Beasymix') + (which !== 'full' ? `-${which}` : ''); a.download = `${base}.wav`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+  status(`Exporté (${bit}-bit, LUFS ${integratedLufs(buf).toFixed(1)}).`, 'ok');
 }
 
 /* ============================================================
-   ÉVÉNEMENTS
+   BOUTONS & UI
    ============================================================ */
-$('btnPlay').addEventListener('click', () => playMix(0));
+function updateButtons() {
+  const hasAny = state.voice || state.inst || state.adlib;
+  $('btnRender').disabled = !hasAny;
+  $('btnRenderFull').disabled = !hasAny;
+  $('btnRenderVoice').disabled = !state.voice;
+  $('btnRenderInst').disabled = !state.inst;
+  $('btnPlay').disabled = !hasAny;
+  $('btnStop').disabled = !hasAny;
+  $('btnPreviewDry').disabled = !hasAny;
+  $('btnAnalyze').disabled = !state.voice;
+}
+
+$('btnPlay').addEventListener('click', () => {
+  if (state.playing) stopMix();
+  else playMix(0);
+});
 $('btnStop').addEventListener('click', stopMix);
 $('btnRender').addEventListener('click', () => downloadRender('full'));
 $('btnRenderFull').addEventListener('click', () => downloadRender('full'));
@@ -1672,229 +1490,82 @@ $('btnPreviewDry').addEventListener('click', async () => {
   if (!state.inst) return;
   if (!state.ctx) state.ctx = new AudioContext();
   if (state.ctx.state === 'suspended') await state.ctx.resume();
-  const src = state.ctx.createBufferSource();
-  src.buffer = state.inst;
-  src.connect(state.ctx.destination);
-  src.start();
+  const src = state.ctx.createBufferSource(); src.buffer = state.inst; src.connect(state.ctx.destination); src.start();
 });
 
-/* ============================================================
-   ANALYSE PITCH
-   ============================================================ */
 $('btnAnalyze').addEventListener('click', async () => {
   if (!state.voice) return;
-  status('Analyse de la hauteur…');
-  progress(0.1);
-  await new Promise(r => setTimeout(r, 30));
-  const sr = state.voice.sampleRate;
-  const data = state.voice.getChannelData(0);
-  const W = Math.round(sr * 0.04), hop = Math.round(W/2);
-  const pitches = [];
-  for (let pos = 0; pos + W < data.length; pos += hop) {
-    pitches.push(detectPitch(data.subarray(pos, pos+W), sr));
-  }
-  const canvas = $('pitchCanvas');
-  const c2d = fitCanvas(canvas);
-  const w = canvas.width, h = canvas.height;
-  c2d.clearRect(0, 0, w, h);
-  c2d.strokeStyle = '#7c5cff'; c2d.lineWidth = 2 * devicePixelRatio;
-  c2d.beginPath();
-  const voiced = pitches.filter(p => p > 0);
-  const minP = voiced.length ? Math.min(...voiced) : 80;
-  const maxP = voiced.length ? Math.max(...voiced) : 1000;
+  status('Analyse…'); progress(0.1); await new Promise(r => setTimeout(r, 30));
+  const sr = state.voice.sampleRate, data = state.voice.getChannelData(0), W = Math.round(sr * 0.04), hop = Math.round(W/2), pitches = [];
+  for (let pos = 0; pos + W < data.length; pos += hop) pitches.push(detectPitch(data.subarray(pos, pos+W), sr));
+  const canvas = $('pitchCanvas'), c2d = fitCanvas(canvas), w = canvas.width, h = canvas.height;
+  c2d.clearRect(0, 0, w, h); c2d.strokeStyle = '#7c5cff'; c2d.lineWidth = 2 * devicePixelRatio; c2d.beginPath();
+  const voiced = pitches.filter(p => p > 0), minP = voiced.length ? Math.min(...voiced) : 80, maxP = voiced.length ? Math.max(...voiced) : 1000;
   pitches.forEach((p, i) => {
     const x = i / pitches.length * w;
-    if (p > 0) {
-      const y = h - ((Math.log2(p) - Math.log2(minP)) / (Math.log2(maxP) - Math.log2(minP) + 0.001)) * h * 0.9 - h*0.05;
-      if (i === 0 || pitches[i-1] <= 0) c2d.moveTo(x, y);
-      else c2d.lineTo(x, y);
-    }
+    if (p > 0) { const y = h - ((Math.log2(p) - Math.log2(minP)) / (Math.log2(maxP) - Math.log2(minP) + 0.001)) * h * 0.9 - h*0.05; if (i === 0 || pitches[i-1] <= 0) c2d.moveTo(x, y); else c2d.lineTo(x, y); }
   });
   c2d.stroke();
   if (voiced.length) {
-    const sorted = [...voiced].sort((a,b)=>a-b);
-    const median = sorted[Math.floor(sorted.length/2)];
-    const midi = Math.round(69 + 12 * Math.log2(median/440));
+    const sorted = [...voiced].sort((a,b)=>a-b), median = sorted[Math.floor(sorted.length/2)], midi = Math.round(69 + 12 * Math.log2(median/440));
     const notes = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
-    $('analyzeInfo').textContent = `Note médiane : ${notes[(midi%12+12)%12]}${Math.floor(midi/12)-1} (≈ ${median.toFixed(0)} Hz) · ${voiced.length} frames voisées`;
-  } else {
-    $('analyzeInfo').textContent = 'Aucune voix détectée.';
-  }
-  progress(null);
-  status('Analyse terminée.', 'ok');
+    $('analyzeInfo').textContent = `Note médiane : ${notes[(midi%12+12)%12]}${Math.floor(midi/12)-1} (≈ ${median.toFixed(0)} Hz)`;
+  } else $('analyzeInfo').textContent = 'Aucune voix détectée.';
+  progress(null); status('Analyse terminée.', 'ok');
 });
 
 /* ============================================================
    MICRO
    ============================================================ */
 function checkMicEnvironment() {
-  const isFile = location.protocol === 'file:';
-  const isLocalhost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-  const isHttps = location.protocol === 'https:';
-  const isSecure = isHttps || isLocalhost;
-
-  if (isFile) {
-    $('micStatus').innerHTML =
-      '⚠️ Page ouverte en <code>file://</code> — le micro est <b>bloqué</b> par le navigateur.<br><br>' +
-      '<b>Solution</b> : lance un petit serveur local.<br>' +
-      'Ouvre un terminal dans le dossier du fichier et tape :<br>' +
-      '<code>python3 -m http.server 8000</code><br>' +
-      'Puis ouvre : <a href="http://localhost:8000/index.html">http://localhost:8000/index.html</a>';
-    $('btnMic').disabled = true;
-    return false;
-  }
-  if (!isSecure) {
-    $('micStatus').innerHTML =
-      '⚠️ Le micro nécessite <b>HTTPS</b> ou <b>localhost</b>.<br>' +
-      'Tu es actuellement sur <code>' + location.origin + '</code>.<br>' +
-      'Solutions :<br>' +
-      '• Ordinateur : utilise <a href="http://localhost:8000/index.html">localhost</a><br>' +
-      '• Téléphone : utilise un tunnel HTTPS (ex: <code>ngrok http 8000</code>)';
-    $('btnMic').disabled = true;
-    return false;
-  }
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    $('micStatus').textContent = '⚠️ API micro non supportée par ce navigateur.';
-    $('btnMic').disabled = true;
-    return false;
-  }
-  $('micStatus').textContent = 'Clique sur « Micro » pour autoriser l\'accès.';
-  return true;
+  const isFile = location.protocol === 'file:', isLocalhost = location.hostname === 'localhost' || location.hostname === '127.0.0.1', isHttps = location.protocol === 'https:', isSecure = isHttps || isLocalhost;
+  if (isFile) { $('micStatus').innerHTML = '⚠️ Page ouverte en <code>file://</code> — le micro est <b>bloqué</b>.<br><b>Solution</b> : lance un serveur local (<code>python3 -m http.server 8000</code>) puis ouvre <a href="http://localhost:8000/index.html">http://localhost:8000/index.html</a>'; $('btnMic').disabled = true; return false; }
+  if (!isSecure) { $('micStatus').innerHTML = '⚠️ Le micro nécessite <b>HTTPS</b> ou <b>localhost</b>.<br>Tu es sur <code>' + location.origin + '</code>.<br><a href="http://localhost:8000/index.html">Ouvrir en localhost</a> ou utiliser un tunnel HTTPS.'; $('btnMic').disabled = true; return false; }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { $('micStatus').textContent = '⚠️ API micro non supportée par ce navigateur.'; $('btnMic').disabled = true; return false; }
+  $('micStatus').textContent = 'Clique sur « Micro » pour autoriser l\'accès.'; return true;
 }
 
 async function requestMic() {
   $('btnMic').disabled = true;
-  $('micStatus').innerHTML = '⏳ Demande d\'autorisation en cours…<br>' +
-    '<small style="color:#8888a0">Regarde en haut de la fenêtre — une popup doit apparaître. Clique sur « Autoriser ».</small>';
-
+  $('micStatus').innerHTML = '⏳ Demande d\'autorisation…<br><small style="color:#8888a0">Regarde en haut de la fenêtre.</small>';
   try {
     let permState = 'prompt';
-    if (navigator.permissions && navigator.permissions.query) {
-      try {
-        const p = await navigator.permissions.query({ name: 'microphone' });
-        permState = p.state;
-      } catch (e) { }
-    }
-
+    if (navigator.permissions && navigator.permissions.query) { try { const p = await navigator.permissions.query({ name: 'microphone' }); permState = p.state; } catch (e) { } }
     if (permState === 'denied') {
-      $('micStatus').innerHTML =
-        '🚫 Permission bloquée précédemment.<br>' +
-        'Pour la réactiver :<br>' +
-        '• <b>Chrome/Edge</b> : clique sur le <b>cadenas 🔒</b> dans la barre d\'adresse → <b>Microphone</b> → <b>Autoriser</b><br>' +
-        '• <b>Firefox</b> : icône 🔒 → <b>Effacer la permission</b><br>' +
-        '• <b>Safari iOS</b> : Réglages → Safari → Microphone → Demander<br>' +
-        'Puis recharge la page.<br>' +
-        '<button id="btnResetMic" class="btn sec small" style="margin-top:8px">🔄 Réessayer</button>';
+      $('micStatus').innerHTML = '🚫 Permission bloquée.<br>Réinitialise : clique sur le <b>cadenas 🔒</b> → <b>Microphone</b> → <b>Autoriser</b>, puis recharge.<br><button id="btnResetMic" class="btn sec small" style="margin-top:8px">🔄 Réessayer</button>';
       $('btnMic').disabled = false;
-      const reset = document.getElementById('btnResetMic');
-      if (reset) reset.addEventListener('click', requestMic);
+      const reset = document.getElementById('btnResetMic'); if (reset) reset.addEventListener('click', requestMic);
       return;
     }
-
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false,
-        channelCount: 1,
-      },
-      video: false,
-    });
-
-    state.micStream = stream;
-    $('btnRec').disabled = false;
-    $('btnMic').disabled = true;
-
-    const track = stream.getAudioTracks()[0];
-    const settings = track.getSettings ? track.getSettings() : {};
-    $('micStatus').innerHTML =
-      `✅ Micro actif : <b>${track.label || 'Micro par défaut'}</b>` +
-      (settings.sampleRate ? ` · ${settings.sampleRate} Hz` : '') +
-      `<br><button id="btnReleaseMic" class="btn sec small" style="margin-top:8px">🔌 Libérer le micro</button>`;
-
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 }, video: false });
+    state.micStream = stream; $('btnRec').disabled = false; $('btnMic').disabled = true;
+    const track = stream.getAudioTracks()[0], settings = track.getSettings ? track.getSettings() : {};
+    $('micStatus').innerHTML = `✅ Micro actif : <b>${track.label || 'Micro par défaut'}</b>` + (settings.sampleRate ? ` · ${settings.sampleRate} Hz` : '') + `<br><button id="btnReleaseMic" class="btn sec small" style="margin-top:8px">🔌 Libérer le micro</button>`;
     const rel = document.getElementById('btnReleaseMic');
-    if (rel) rel.addEventListener('click', () => {
-      stream.getTracks().forEach(t => t.stop());
-      state.micStream = null;
-      $('btnRec').disabled = true;
-      $('btnMic').disabled = false;
-      stopMicVisualizer();
-      $('micStatus').textContent = 'Micro libéré. Clique sur « Micro » pour réactiver.';
-    });
-
+    if (rel) rel.addEventListener('click', () => { stream.getTracks().forEach(t => t.stop()); state.micStream = null; $('btnRec').disabled = true; $('btnMic').disabled = false; stopMicVisualizer(); $('micStatus').textContent = 'Micro libéré.'; });
     startMicVisualizer(stream);
-
   } catch (err) {
-    $('btnMic').disabled = false;
-    let msg = '';
-    switch (err.name) {
-      case 'NotAllowedError':
-      case 'PermissionDeniedError':
-        msg = '🚫 Permission refusée. Autorise le micro dans les paramètres du navigateur (icône 🔒) puis recharge.';
-        break;
-      case 'NotFoundError':
-      case 'DevicesNotFoundError':
-        msg = '🎙️ Aucun micro détecté. Vérifie qu\'un micro est branché.';
-        break;
-      case 'NotReadableError':
-      case 'TrackStartError':
-        msg = '⚠️ Micro utilisé par une autre application. Ferme Zoom/Teams/Discord et réessaye.';
-        break;
-      case 'OverconstrainedError':
-        msg = '⚠️ Contraintes audio non supportées par ton micro.';
-        break;
-      case 'SecurityError':
-        msg = '🔒 Blocage de sécurité. Sers la page en localhost ou HTTPS.';
-        break;
-      default:
-        msg = `❌ Erreur : ${err.name} — ${err.message}`;
-    }
-    $('micStatus').innerHTML = msg;
-    console.error('Mic error:', err);
+    $('btnMic').disabled = false; let msg = '';
+    switch (err.name) { case 'NotAllowedError': msg = '🚫 Permission refusée. Autorise le micro (icône 🔒) puis recharge.'; break; case 'NotFoundError': msg = '🎙️ Aucun micro détecté.'; break; case 'NotReadableError': msg = '⚠️ Micro utilisé par une autre application.'; break; case 'SecurityError': msg = '🔒 Blocage de sécurité. Sers la page en localhost ou HTTPS.'; break; default: msg = `❌ Erreur : ${err.name} — ${err.message}`; }
+    $('micStatus').innerHTML = msg; console.error('Mic error:', err);
   }
 }
 
 function startMicVisualizer(stream) {
   if (!state.ctx) state.ctx = new (window.AudioContext || window.webkitAudioContext)();
   if (state.ctx.state === 'suspended') state.ctx.resume();
-  const src = state.ctx.createMediaStreamSource(stream);
-  const analyser = state.ctx.createAnalyser();
-  analyser.fftSize = 1024;
-  src.connect(analyser);
-
-  const canvas = $('micCanvas');
-  const c2d = fitCanvas(canvas);
-  const data = new Uint8Array(analyser.frequencyBinCount);
-
+  const src = state.ctx.createMediaStreamSource(stream), analyser = state.ctx.createAnalyser(); analyser.fftSize = 1024; src.connect(analyser);
+  const canvas = $('micCanvas'), c2d = fitCanvas(canvas), data = new Uint8Array(analyser.frequencyBinCount);
   const draw = () => {
     if (!state.micStream) return;
     analyser.getByteTimeDomainData(data);
-    const w = canvas.width, h = canvas.height;
-    c2d.clearRect(0, 0, w, h);
-    c2d.strokeStyle = '#3ddc84';
-    c2d.lineWidth = 2 * devicePixelRatio;
-    c2d.beginPath();
+    const w = canvas.width, h = canvas.height; c2d.clearRect(0, 0, w, h); c2d.strokeStyle = '#3ddc84'; c2d.lineWidth = 2 * devicePixelRatio; c2d.beginPath();
     const slice = w / data.length;
-    for (let i = 0; i < data.length; i++) {
-      const v = (data[i] - 128) / 128;
-      const y = h / 2 + v * h / 2 * 0.9;
-      if (i === 0) c2d.moveTo(0, y);
-      else c2d.lineTo(i * slice, y);
-    }
-    c2d.stroke();
-    state.micRAF = requestAnimationFrame(draw);
-  };
-  draw();
+    for (let i = 0; i < data.length; i++) { const v = (data[i] - 128) / 128, y = h / 2 + v * h / 2 * 0.9; if (i === 0) c2d.moveTo(0, y); else c2d.lineTo(i * slice, y); }
+    c2d.stroke(); state.micRAF = requestAnimationFrame(draw);
+  }; draw();
 }
-
-function stopMicVisualizer() {
-  if (state.micRAF) { cancelAnimationFrame(state.micRAF); state.micRAF = null; }
-  const c = $('micCanvas');
-  if (c) {
-    const ctx = c.getContext('2d');
-    ctx.clearRect(0, 0, c.width, c.height);
-  }
-}
+function stopMicVisualizer() { if (state.micRAF) { cancelAnimationFrame(state.micRAF); state.micRAF = null; } const c = $('micCanvas'); if (c) { const ctx = c.getContext('2d'); ctx.clearRect(0, 0, c.width, c.height); } }
 
 $('btnRec').addEventListener('click', async () => {
   if (state.mediaRec && state.mediaRec.state === 'recording') { state.mediaRec.stop(); return; }
@@ -1903,77 +1574,55 @@ $('btnRec').addEventListener('click', async () => {
   const mr = new MediaRecorder(state.micStream);
   mr.ondataavailable = e => state.micChunks.push(e.data);
   mr.onstop = async () => {
-    const blob = new Blob(state.micChunks, { type: 'audio/webm' });
-    const ab = await blob.arrayBuffer();
-    const ctx = new AudioContext();
-    const buf = await ctx.decodeAudioData(ab);
-    ctx.close();
-    state.voice = buf;
-    $('n-voice').textContent = `🎙️ Enregistrement · ${buf.duration.toFixed(1)}s`;
-    $('dz-voice').classList.add('filled');
-    $('btnRec').classList.remove('active');
-    $('btnRec').textContent = '● Rec';
-    updateButtons(); drawWaveformAll();
-    status('Enregistrement prêt.', 'ok');
+    const blob = new Blob(state.micChunks, { type: 'audio/webm' }), ab = await blob.arrayBuffer(), ctx = new AudioContext();
+    const buf = await ctx.decodeAudioData(ab); ctx.close(); state.voice = buf;
+    $('n-voice').textContent = `🎙️ Enregistrement · ${buf.duration.toFixed(1)}s`; $('dz-voice').classList.add('filled');
+    $('btnRec').classList.remove('active'); $('btnRec').textContent = '● Rec';
+    updateButtons(); drawWaveformAll(); status('Enregistrement prêt.', 'ok');
   };
-  mr.start();
-  state.mediaRec = mr;
-  $('btnRec').classList.add('active');
-  $('btnRec').textContent = '■ Stop';
+  mr.start(); state.mediaRec = mr; $('btnRec').classList.add('active'); $('btnRec').textContent = '■ Stop';
 });
 
 $('btnMic').addEventListener('click', requestMic);
 window.addEventListener('load', checkMicEnvironment);
 
 /* ============================================================
-   PRESETS
+   PRESETS & HISTORY
    ============================================================ */
 const PRESETS = {
-  pop:     { 'v-gain':0, 'v-eq-l':-2, 'v-eq-lm':1, 'v-eq-hm':2, 'v-eq-h':3, 'v-c-thr':-22, 'v-c-ratio':4, 'v-c-make':3, 'v-sat':15, 'fx-rev-mix':22, 'fx-dly-mix':12, 'at-on':true, 'at-strength':60, 'i-gain':-4, 'm-eq-l':1, 'm-eq-h':2, 'm-c-thr':-16, 'm-c-ratio':2, 'm-c-make':2, 'm-width':110, 'm-lufs':-14 },
-  rap:     { 'v-gain':1, 'v-eq-l':-4, 'v-eq-lm':-1, 'v-eq-hm':2, 'v-eq-h':4, 'v-c-thr':-20, 'v-c-ratio':5, 'v-c-make':4, 'v-sat':25, 'at-on':true, 'at-strength':75, 'fx-rev-mix':12, 'fx-dly-mix':8, 'i-gain':-6, 'm-c-thr':-14, 'm-c-ratio':2.5, 'm-c-make':3, 'm-width':100, 'm-lufs':-11 },
-  rnb:     { 'v-gain':0, 'v-eq-l':-1, 'v-eq-hm':1, 'v-eq-h':3, 'v-c-thr':-24, 'v-c-ratio':3.5, 'v-c-make':3, 'v-sat':18, 'at-on':true, 'at-strength':65, 'fx-rev-mix':32, 'fx-dly-mix':18, 'i-gain':-5, 'm-eq-h':2, 'm-width':120, 'm-lufs':-14 },
-  rock:    { 'v-gain':0, 'v-eq-l':0, 'v-eq-hm':2, 'v-eq-h':3, 'v-c-thr':-20, 'v-c-ratio':4, 'v-c-make':4, 'v-sat':35, 'at-on':true, 'at-strength':25, 'fx-rev-mix':14, 'fx-dly-mix':6, 'i-gain':-3, 'm-c-thr':-12, 'm-c-ratio':3, 'm-c-make':3, 'm-lufs':-10 },
-  edm:     { 'v-gain':1, 'v-eq-h':4, 'v-c-thr':-18, 'v-c-ratio':5, 'v-c-make':4, 'v-sat':30, 'at-on':true, 'at-strength':80, 'fx-rev-mix':28, 'fx-dly-mix':20, 'i-gain':-3, 'm-c-thr':-10, 'm-c-ratio':4, 'm-c-make':4, 'm-width':130, 'm-lufs':-9 },
-  lofi:    { 'v-gain':-2, 'v-eq-l':3, 'v-eq-hm':-3, 'v-eq-h':-6, 'v-sat':45, 'v-sat-type':'soft', 'at-on':false, 'fx-rev-mix':25, 'fx-dly-mix':20, 'i-gain':-4, 'i-eq-h':-5, 'm-c-thr':-18, 'm-lufs':-14 },
+  pop: { 'v-gain':0, 'v-eq-l':-2, 'v-eq-lm':1, 'v-eq-hm':2, 'v-eq-h':3, 'v-c-thr':-22, 'v-c-ratio':4, 'v-c-make':3, 'v-sat':15, 'fx-rev-mix':22, 'fx-dly-mix':12, 'at-on':true, 'at-strength':60, 'i-gain':-4, 'm-eq-l':1, 'm-eq-h':2, 'm-c-thr':-16, 'm-c-ratio':2, 'm-c-make':2, 'm-width':110, 'm-lufs':-14 },
+  rap: { 'v-gain':1, 'v-eq-l':-4, 'v-eq-lm':-1, 'v-eq-hm':2, 'v-eq-h':4, 'v-c-thr':-20, 'v-c-ratio':5, 'v-c-make':4, 'v-sat':25, 'at-on':true, 'at-strength':75, 'fx-rev-mix':12, 'fx-dly-mix':8, 'i-gain':-6, 'm-c-thr':-14, 'm-c-ratio':2.5, 'm-c-make':3, 'm-width':100, 'm-lufs':-11 },
+  rnb: { 'v-gain':0, 'v-eq-l':-1, 'v-eq-hm':1, 'v-eq-h':3, 'v-c-thr':-24, 'v-c-ratio':3.5, 'v-c-make':3, 'v-sat':18, 'at-on':true, 'at-strength':65, 'fx-rev-mix':32, 'fx-dly-mix':18, 'i-gain':-5, 'm-eq-h':2, 'm-width':120, 'm-lufs':-14 },
+  rock: { 'v-gain':0, 'v-eq-l':0, 'v-eq-hm':2, 'v-eq-h':3, 'v-c-thr':-20, 'v-c-ratio':4, 'v-c-make':4, 'v-sat':35, 'at-on':true, 'at-strength':25, 'fx-rev-mix':14, 'fx-dly-mix':6, 'i-gain':-3, 'm-c-thr':-12, 'm-c-ratio':3, 'm-c-make':3, 'm-lufs':-10 },
+  edm: { 'v-gain':1, 'v-eq-h':4, 'v-c-thr':-18, 'v-c-ratio':5, 'v-c-make':4, 'v-sat':30, 'at-on':true, 'at-strength':80, 'fx-rev-mix':28, 'fx-dly-mix':20, 'i-gain':-3, 'm-c-thr':-10, 'm-c-ratio':4, 'm-c-make':4, 'm-width':130, 'm-lufs':-9 },
+  lofi: { 'v-gain':-2, 'v-eq-l':3, 'v-eq-hm':-3, 'v-eq-h':-6, 'v-sat':45, 'v-sat-type':'soft', 'at-on':false, 'fx-rev-mix':25, 'fx-dly-mix':20, 'i-gain':-4, 'i-eq-h':-5, 'm-c-thr':-18, 'm-lufs':-14 },
   podcast: { 'v-gain':2, 'v-eq-l':-3, 'v-eq-lm':-1, 'v-eq-hm':2, 'v-eq-h':3, 'v-c-thr':-24, 'v-c-ratio':5, 'v-c-make':5, 'v-sat':10, 'at-on':false, 'fx-rev-mix':6, 'fx-dly-mix':0, 'i-gain':-12, 'm-c-thr':-14, 'm-c-ratio':3, 'm-c-make':3, 'm-lufs':-16 },
-  tiktok:  { 'v-gain':2, 'v-eq-l':-2, 'v-eq-h':3, 'v-c-thr':-20, 'v-c-ratio':5, 'v-c-make':4, 'v-sat':20, 'at-on':true, 'at-strength':70, 'fx-rev-mix':18, 'fx-dly-mix':10, 'i-gain':-4, 'm-c-thr':-12, 'm-c-ratio':3, 'm-c-make':3, 'm-lufs':-9 },
-  drill:   { 'v-gain':2, 'v-eq-l':-5, 'v-eq-hm':3, 'v-eq-h':5, 'v-c-thr':-18, 'v-c-ratio':5, 'v-c-make':5, 'v-sat':30, 'at-on':true, 'at-strength':85, 'fx-rev-mix':10, 'fx-dly-mix':6, 'i-gain':-5, 'm-c-thr':-12, 'm-c-make':4, 'm-lufs':-10 },
-  acoustic:{ 'v-gain':0, 'v-eq-l':1, 'v-eq-hm':1, 'v-eq-h':2, 'v-c-thr':-26, 'v-c-ratio':2.5, 'v-c-make':2, 'v-sat':8, 'at-on':true, 'at-strength':40, 'fx-rev-mix':22, 'fx-dly-mix':10, 'i-gain':-4, 'm-width':105, 'm-lufs':-14 },
+  tiktok: { 'v-gain':2, 'v-eq-l':-2, 'v-eq-h':3, 'v-c-thr':-20, 'v-c-ratio':5, 'v-c-make':4, 'v-sat':20, 'at-on':true, 'at-strength':70, 'fx-rev-mix':18, 'fx-dly-mix':10, 'i-gain':-4, 'm-c-thr':-12, 'm-c-ratio':3, 'm-c-make':3, 'm-lufs':-9 },
+  drill: { 'v-gain':2, 'v-eq-l':-5, 'v-eq-hm':3, 'v-eq-h':5, 'v-c-thr':-18, 'v-c-ratio':5, 'v-c-make':5, 'v-sat':30, 'at-on':true, 'at-strength':85, 'fx-rev-mix':10, 'fx-dly-mix':6, 'i-gain':-5, 'm-c-thr':-12, 'm-c-make':4, 'm-lufs':-10 },
+  acoustic: { 'v-gain':0, 'v-eq-l':1, 'v-eq-hm':1, 'v-eq-h':2, 'v-c-thr':-26, 'v-c-ratio':2.5, 'v-c-make':2, 'v-sat':8, 'at-on':true, 'at-strength':40, 'fx-rev-mix':22, 'fx-dly-mix':10, 'i-gain':-4, 'm-width':105, 'm-lufs':-14 },
 };
 document.querySelectorAll('[data-preset]').forEach(btn => {
   btn.addEventListener('click', () => {
     const p = PRESETS[btn.dataset.preset]; if (!p) return;
     document.querySelectorAll('[data-preset]').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    pushHistory(); applyParams(p);
+    btn.classList.add('active'); pushHistory(); applyParams(p);
     status(`Preset "${btn.textContent}" appliqué.`, 'ok');
   });
 });
 document.querySelectorAll('[data-lufs]').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('[data-lufs]').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    $('m-lufs').value = btn.dataset.lufs;
-    $('m-lufs').dispatchEvent(new Event('input'));
+    btn.classList.add('active'); $('m-lufs').value = btn.dataset.lufs; $('m-lufs').dispatchEvent(new Event('input'));
   });
 });
 
-/* ============================================================
-   MES PRESETS (localStorage)
-   ============================================================ */
 function refreshMyPresets() {
-  const list = JSON.parse(localStorage.getItem('Beasymix-presets') || '{}');
-  const el = $('myPresets'); el.innerHTML = '';
+  const list = JSON.parse(localStorage.getItem('Beasymix-presets') || '{}'), el = $('myPresets'); el.innerHTML = '';
   Object.keys(list).forEach(name => {
-    const chip = document.createElement('button');
-    chip.className = 'chip';
-    chip.textContent = name;
+    const chip = document.createElement('button'); chip.className = 'chip'; chip.textContent = name;
     chip.addEventListener('click', () => { pushHistory(); applyParams(list[name]); status(`Preset "${name}" chargé.`, 'ok'); });
     chip.addEventListener('contextmenu', e => {
-      e.preventDefault();
-      if (confirm(`Supprimer "${name}" ?`)) {
-        delete list[name]; localStorage.setItem('Beasymix-presets', JSON.stringify(list)); refreshMyPresets();
-      }
+      e.preventDefault(); if (confirm(`Supprimer "${name}" ?`)) { delete list[name]; localStorage.setItem('Beasymix-presets', JSON.stringify(list)); refreshMyPresets(); }
     });
     el.appendChild(chip);
   });
@@ -1981,49 +1630,30 @@ function refreshMyPresets() {
 $('btnSavePreset').addEventListener('click', () => {
   const name = $('presetName').value.trim(); if (!name) return;
   const list = JSON.parse(localStorage.getItem('Beasymix-presets') || '{}');
-  list[name] = readAllParams();
-  localStorage.setItem('Beasymix-presets', JSON.stringify(list));
-  $('presetName').value = '';
-  refreshMyPresets();
-  status(`Preset "${name}" sauvegardé.`, 'ok');
+  list[name] = readAllParams(); localStorage.setItem('Beasymix-presets', JSON.stringify(list));
+  $('presetName').value = ''; refreshMyPresets(); status(`Preset "${name}" sauvegardé.`, 'ok');
 });
 refreshMyPresets();
 
-/* ============================================================
-   TABS
-   ============================================================ */
 $('tabbar').addEventListener('click', e => {
   const t = e.target.closest('.tab'); if (!t) return;
   document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
   document.querySelectorAll('.panel').forEach(x => x.classList.remove('active'));
-  t.classList.add('active');
-  document.querySelector(`[data-panel="${t.dataset.tab}"]`).classList.add('active');
+  t.classList.add('active'); document.querySelector(`[data-panel="${t.dataset.tab}"]`).classList.add('active');
   t.scrollIntoView({ behavior:'smooth', inline:'center', block:'nearest' });
-  if (t.dataset.tab === 'sources') {
-    setTimeout(() => { canvases.forEach(id => fitCanvas($(id))); drawWaveformAll(); }, 50);
-  }
+  if (t.dataset.tab === 'sources') setTimeout(() => { canvases.forEach(id => fitCanvas($(id))); drawWaveformAll(); }, 50);
 });
 
-/* ============================================================
-   A/B / UNDO
-   ============================================================ */
 function pushHistory() {
-  const snap = readAllParams();
-  state.history = state.history.slice(0, state.historyIdx + 1);
-  state.history.push(snap);
-  if (state.history.length > state.maxHistory) state.history.shift();
-  state.historyIdx = state.history.length - 1;
+  const snap = readAllParams(); state.history = state.history.slice(0, state.historyIdx + 1); state.history.push(snap);
+  if (state.history.length > state.maxHistory) state.history.shift(); state.historyIdx = state.history.length - 1;
 }
 setInterval(() => {
-  const snap = readAllParams();
-  const last = state.history[state.historyIdx];
+  const snap = readAllParams(), last = state.history[state.historyIdx];
   if (!last || JSON.stringify(snap) !== JSON.stringify(last)) pushHistory();
 }, 5000);
 $('btnUndo').addEventListener('click', () => {
-  if (state.historyIdx <= 0) return;
-  state.historyIdx--;
-  applyParams(state.history[state.historyIdx]);
-  status('Undo.', 'ok');
+  if (state.historyIdx <= 0) return; state.historyIdx--; applyParams(state.history[state.historyIdx]); status('Undo.', 'ok');
 });
 $('btnA').addEventListener('click', () => {
   if (!state.slots.A) { state.slots.A = readAllParams(); status('Slot A sauvegardé.', 'ok'); }
@@ -2036,9 +1666,6 @@ $('btnB').addEventListener('click', () => {
 $('btnCopyAtoB').addEventListener('click', () => { state.slots.B = state.slots.A || readAllParams(); status('A → B copié.', 'ok'); });
 $('btnCopyBtoA').addEventListener('click', () => { state.slots.A = state.slots.B || readAllParams(); status('B → A copié.', 'ok'); });
 
-/* ============================================================
-   CLAVIER (desktop)
-   ============================================================ */
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT' && e.target.type === 'text') return;
   if (e.code === 'Space') { e.preventDefault(); state.playing ? stopMix() : playMix(0); }
@@ -2049,14 +1676,8 @@ document.addEventListener('keydown', e => {
   if (e.key === 'm' || e.key === 'M') stopMix();
 });
 
-/* ============================================================
-   INIT
-   ============================================================ */
 updateButtons();
-window.addEventListener('load', () => {
-  canvases.forEach(id => fitCanvas($(id)));
-  drawWaveformAll();
-});
+window.addEventListener('load', () => { canvases.forEach(id => fitCanvas($(id))); drawWaveformAll(); });
 status('Prêt. Charge tes fichiers pour commencer.');
 </script>
 </body>
