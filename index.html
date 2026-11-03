@@ -8,7 +8,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="format-detection" content="telephone=no">
-<title>BEasyMix Studio — Responsive</title>
+<title>EasyMix Studio — Responsive</title>
 <style>
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
   :root{
@@ -153,7 +153,7 @@
 <div class="app">
   <header>
     <div class="brand">
-      <h1>🎛️ BEasyMix Studio</h1>
+      <h1>🎛️ EasyMix Studio</h1>
       <div class="subtitle">
         <span>Prototype local · Web Audio API</span>
       </div>
@@ -183,22 +183,22 @@
       <h2>Pistes sources</h2>
       <div class="grid3">
         <label class="dropzone" id="dz-voice">
-          <input type="file" id="f-voice" accept="audio/*">
+          <input type="file" id="f-voice" accept="audio/*" multiple>
           <div class="dz-label">🎤 Voix principale</div>
           <div class="dz-name" id="n-voice"></div>
         </label>
         <label class="dropzone" id="dz-inst">
-          <input type="file" id="f-inst" accept="audio/*">
-          <div class="dz-label">🎹 Instrumental</div>
+          <input type="file" id="f-inst" accept="audio/*" multiple>
+          <div class="dz-label">🎹 Instrumental (Multi)</div>
           <div class="dz-name" id="n-inst"></div>
         </label>
         <label class="dropzone" id="dz-adlib">
-          <input type="file" id="f-adlib" accept="audio/*">
+          <input type="file" id="f-adlib" accept="audio/*" multiple>
           <div class="dz-label">🎙️ Adlibs</div>
           <div class="dz-name" id="n-adlib"></div>
         </label>
       </div>
-      <div class="info">Touche pour ouvrir le sélecteur de fichier. Formats : WAV, MP3, M4A, OGG, FLAC.</div>
+      <div class="info">Touche pour ouvrir le sélecteur. Tu peux sélectionner <b>plusieurs fichiers</b> en même temps pour les fusionner (ex: basse + batterie + instru).</div>
     </div>
 
     <div class="card">
@@ -528,7 +528,7 @@
         </div>
       </div>
       <div class="slider"><label>Nom du fichier</label>
-        <input type="text" id="ex-name" class="select" value="Beasymix-master" style="cursor:text">
+        <input type="text" id="ex-name" class="select" value="easymix-master" style="cursor:text">
       </div>
     </div>
 
@@ -596,7 +596,7 @@
 
 <script>
 /* ============================================================
-   BEASYMIX STUDIO — moteur audio
+   EASYMIX STUDIO — moteur audio
    ============================================================ */
 const $ = id => document.getElementById(id);
 const state = {
@@ -652,7 +652,7 @@ window.addEventListener('orientationchange', () => {
 window.addEventListener('resize', () => drawWaveformAll());
 
 /* ============================================================
-   CHARGEMENT FICHIERS
+   CHARGEMENT & FUSION FICHIERS MULTIPLES
    ============================================================ */
 async function decodeFile(file) {
   const ab = await file.arrayBuffer();
@@ -661,23 +661,75 @@ async function decodeFile(file) {
   ctx.close();
   return buf;
 }
+
+// Fusionne plusieurs AudioBuffers en un seul (comme un mix de stems)
+async function mergeAudioBuffers(buffers) {
+  let maxLen = 0;
+  let maxChannels = 2;
+  const sampleRate = buffers[0].sampleRate;
+
+  buffers.forEach(buf => {
+    if (buf.length > maxLen) maxLen = buf.length;
+    if (buf.numberOfChannels > maxChannels) maxChannels = buf.numberOfChannels;
+  });
+
+  const outCtx = new OfflineAudioContext(maxChannels, maxLen, sampleRate);
+  const outBuffer = outCtx.createBuffer(maxChannels, maxLen, sampleRate);
+
+  for (let c = 0; c < maxChannels; c++) {
+    const outData = outBuffer.getChannelData(c);
+    for (const buf of buffers) {
+      if (c < buf.numberOfChannels) {
+        const inData = buf.getChannelData(c);
+        for (let i = 0; i < inData.length; i++) {
+          outData[i] += inData[i];
+        }
+      }
+    }
+    // Clipping prevention (limite à 1.0 / -1.0)
+    for (let i = 0; i < outData.length; i++) {
+      outData[i] = Math.max(-1, Math.min(1, outData[i]));
+    }
+  }
+  return outBuffer;
+}
+
 async function loadTrack(inputId, nameId, dzId, key) {
-  const file = $(inputId).files[0];
-  if (!file) return;
-  status(`Chargement de ${file.name}…`);
+  const files = $(inputId).files;
+  if (!files || files.length === 0) return;
+  
+  status(`Chargement de ${files.length} fichier(s)…`);
   try {
-    const buf = await decodeFile(file);
-    state[key] = buf;
-    $(nameId).textContent = `${file.name} · ${buf.duration.toFixed(1)}s · ${buf.sampleRate}Hz`;
+    const buffers = await Promise.all(Array.from(files).map(decodeFile));
+    let finalBuffer;
+
+    if (buffers.length === 1) {
+      finalBuffer = buffers[0];
+    } else {
+      finalBuffer = await mergeAudioBuffers(buffers);
+    }
+
+    state[key] = finalBuffer;
+    
+    if (files.length === 1) {
+      $(nameId).textContent = `${files[0].name} · ${finalBuffer.duration.toFixed(1)}s · ${finalBuffer.sampleRate}Hz`;
+    } else {
+      $(nameId).textContent = `${files.length} pistes fusionnées · ${finalBuffer.duration.toFixed(1)}s`;
+    }
+    
     $(dzId).classList.add('filled');
-    status('Fichier chargé.', 'ok');
-  } catch (e) { status('Erreur : ' + e.message, 'err'); }
+    status('Fichier(s) chargé(s) avec succès.', 'ok');
+  } catch (e) { 
+    status('Erreur : ' + e.message, 'err'); 
+  }
   updateButtons(); drawWaveformAll();
 }
+
 $('f-voice').addEventListener('change', () => loadTrack('f-voice','n-voice','dz-voice','voice'));
 $('f-inst').addEventListener('change', () => loadTrack('f-inst','n-inst','dz-inst','inst'));
 $('f-adlib').addEventListener('change', () => loadTrack('f-adlib','n-adlib','dz-adlib','adlib'));
 
+// Drag & Drop avec support multi-fichiers
 [['dz-voice','f-voice','n-voice','voice'],
  ['dz-inst','f-inst','n-inst','inst'],
  ['dz-adlib','f-adlib','n-adlib','adlib']].forEach(([dz,input,name,key]) => {
@@ -686,13 +738,22 @@ $('f-adlib').addEventListener('change', () => loadTrack('f-adlib','n-adlib','dz-
   el.addEventListener('dragleave', () => el.classList.remove('dragover'));
   el.addEventListener('drop', async e => {
     e.preventDefault(); el.classList.remove('dragover');
-    const f = e.dataTransfer.files[0]; if (!f) return;
+    const files = e.dataTransfer.files; 
+    if (!files || files.length === 0) return;
+    
+    status(`Chargement de ${files.length} fichier(s)…`);
     try {
-      const buf = await decodeFile(f);
-      state[key] = buf;
-      $(name).textContent = `${f.name} · ${buf.duration.toFixed(1)}s`;
+      const buffers = await Promise.all(Array.from(files).map(decodeFile));
+      let finalBuffer;
+      if (buffers.length === 1) finalBuffer = buffers[0];
+      else finalBuffer = await mergeAudioBuffers(buffers);
+      
+      state[key] = finalBuffer;
+      if (files.length === 1) $(name).textContent = `${files[0].name} · ${finalBuffer.duration.toFixed(1)}s`;
+      else $(name).textContent = `${files.length} pistes fusionnées · ${finalBuffer.duration.toFixed(1)}s`;
+      
       el.classList.add('filled');
-      status('Fichier chargé.', 'ok');
+      status('Fichier(s) chargé(s).', 'ok');
       updateButtons(); drawWaveformAll();
     } catch(err){ status('Erreur : ' + err.message, 'err'); }
   });
@@ -1581,7 +1642,7 @@ async function downloadRender(which = 'full') {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  const base = ($('ex-name').value || 'Beasymix') + (which !== 'full' ? `-${which}` : '');
+  const base = ($('ex-name').value || 'easymix') + (which !== 'full' ? `-${which}` : '');
   a.download = `${base}.wav`;
   document.body.appendChild(a);
   a.click();
@@ -1855,7 +1916,6 @@ $('btnRec').addEventListener('click', async () => {
   $('btnRec').textContent = '■ Stop';
 });
 
-// Un seul écouteur d'événement pour le bouton micro
 $('btnMic').addEventListener('click', requestMic);
 window.addEventListener('load', checkMicEnvironment);
 
@@ -1896,7 +1956,7 @@ document.querySelectorAll('[data-lufs]').forEach(btn => {
    MES PRESETS (localStorage)
    ============================================================ */
 function refreshMyPresets() {
-  const list = JSON.parse(localStorage.getItem('Beasymix-presets') || '{}');
+  const list = JSON.parse(localStorage.getItem('easymix-presets') || '{}');
   const el = $('myPresets'); el.innerHTML = '';
   Object.keys(list).forEach(name => {
     const chip = document.createElement('button');
@@ -1906,7 +1966,7 @@ function refreshMyPresets() {
     chip.addEventListener('contextmenu', e => {
       e.preventDefault();
       if (confirm(`Supprimer "${name}" ?`)) {
-        delete list[name]; localStorage.setItem('Beasymix-presets', JSON.stringify(list)); refreshMyPresets();
+        delete list[name]; localStorage.setItem('easymix-presets', JSON.stringify(list)); refreshMyPresets();
       }
     });
     el.appendChild(chip);
@@ -1914,9 +1974,9 @@ function refreshMyPresets() {
 }
 $('btnSavePreset').addEventListener('click', () => {
   const name = $('presetName').value.trim(); if (!name) return;
-  const list = JSON.parse(localStorage.getItem('Beasymix-presets') || '{}');
+  const list = JSON.parse(localStorage.getItem('easymix-presets') || '{}');
   list[name] = readAllParams();
-  localStorage.setItem('Beasymix-presets', JSON.stringify(list));
+  localStorage.setItem('easymix-presets', JSON.stringify(list));
   $('presetName').value = '';
   refreshMyPresets();
   status(`Preset "${name}" sauvegardé.`, 'ok');
