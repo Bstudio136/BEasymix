@@ -596,7 +596,7 @@
 
 <script>
 /* ============================================================
-   BEASYMIX STUDIO — Moteur temps réel
+   BEASYMIX STUDIO — Moteur temps réel corrigé
    ============================================================ */
 const $ = id => document.getElementById(id);
 const state = {
@@ -834,6 +834,7 @@ function makeSatCurve(amount, type) {
   return curve;
 }
 
+// CORRECTION : Ne connecte plus au destination ici (évite le double son)
 function buildLiveGraph(ctx) {
   const params = readAllParams();
   const nodes = {};
@@ -841,8 +842,8 @@ function buildLiveGraph(ctx) {
   // === VOIX ===
   nodes.vIn = ctx.createGain();
   nodes.vGate = ctx.createDynamicsCompressor();
-  nodes.vGate.threshold.value = parseFloat(params['v-gate-thr']);
-  nodes.vGate.ratio.value = parseFloat(params['v-gate-ratio']);
+  nodes.vGate.threshold.value = params['v-gate-on'] ? parseFloat(params['v-gate-thr']) : 0;
+  nodes.vGate.ratio.value = params['v-gate-on'] ? parseFloat(params['v-gate-ratio']) : 1;
   nodes.vGate.attack.value = 0.001; nodes.vGate.release.value = 0.05; nodes.vGate.knee.value = 0;
   
   nodes.vHpf = ctx.createBiquadFilter(); nodes.vHpf.type = 'highpass';
@@ -965,12 +966,11 @@ function buildLiveGraph(ctx) {
   nodes.mLimiter.release.value = parseFloat(params['m-lim-rel'])/1000;
   nodes.mLimiter.knee.value = 0;
   
-  nodes.mOut = ctx.createGain();
+  nodes.mOut = ctx.createGain(); // Pas de connexion au destination ici !
 
   nodes.masterIn.connect(nodes.mLowShelf); nodes.mLowShelf.connect(nodes.mMid); nodes.mMid.connect(nodes.mHighShelf);
   nodes.mHighShelf.connect(nodes.mComp); nodes.mComp.connect(nodes.mMakeup); nodes.mMakeup.connect(nodes.mSat);
   nodes.mSat.connect(nodes.mLimiter); nodes.mLimiter.connect(nodes.mOut);
-  nodes.mOut.connect(ctx.destination);
 
   // Connecter Voix / Instru / Adlibs au Master
   nodes.vGain.connect(nodes.masterIn);
@@ -986,9 +986,12 @@ function updateLiveParam(id, val) {
     switch (id) {
       case 'v-gain': n.vGain.gain.value = dbToGain(val); break;
       case 'v-pan': n.vPan.pan.value = val/100; break;
-      case 'v-gate-on': break;
-      case 'v-gate-thr': n.vGate.threshold.value = val; break;
-      case 'v-gate-ratio': n.vGate.ratio.value = val; break;
+      case 'v-gate-on': 
+        n.vGate.threshold.value = val ? parseFloat($('v-gate-thr').value) : 0;
+        n.vGate.ratio.value = val ? parseFloat($('v-gate-ratio').value) : 1;
+        break;
+      case 'v-gate-thr': if($('v-gate-on').checked) n.vGate.threshold.value = val; break;
+      case 'v-gate-ratio': if($('v-gate-on').checked) n.vGate.ratio.value = val; break;
       case 'v-eq-l': n.vLowShelf.gain.value = val; break;
       case 'v-eq-lm': n.vLowMid.gain.value = val; break;
       case 'v-eq-hm': n.vHighMid.gain.value = val; break;
@@ -1044,7 +1047,7 @@ function updateLiveParam(id, val) {
   } catch(e) { console.warn('Live update error:', id, e); }
 }
 
-// ---- Pré-calcul Autotune ----
+// ---- Pré-calcul Autotune (Optimisé pour ne pas freeze) ----
 function hann(len) { const w = new Float32Array(len); for (let i=0; i<len; i++) w[i] = 0.5*(1-Math.cos(2*Math.PI*i/(len-1))); return w; }
 function resampleLinear(input, ratio) { const o = Math.round(input.length/ratio), out = new Float32Array(o); for (let i=0; i<o; i++) { const s=i*ratio, i0=Math.floor(s), i1=Math.min(i0+1, input.length-1), f=s-i0; out[i]=input[i0]*(1-f)+input[i1]*f; } return out; }
 function solaStretch(input, factor) { if (Math.abs(factor-1)<1e-3) return input; const W=2048, hO=W/4, hI=Math.max(1,Math.round(hO/factor)), oL=Math.ceil(input.length*factor)+W, out=new Float32Array(oL), win=hann(W); let iP=0, oP=0; while(iP+W<input.length&&oP+W<oL){ for(let i=0;i<W;i++) out[oP+i]+=input[iP+i]*win[i]; iP+=hI; oP+=hO; } const n=new Float32Array(oL); iP=0; oP=0; while(iP+W<input.length&&oP+W<oL){ for(let i=0;i<W;i++) n[oP+i]+=win[i]*win[i]; iP+=hI; oP+=hO; } for(let i=0;i<oL;i++) if(n[i]>1e-6) out[i]/=n[i]; return out; }
@@ -1084,7 +1087,7 @@ async function autotuneBuffer(buffer, opts) {
 }
 
 /* ============================================================
-   MOTEUR DE LECTURE (TEMPS RÉEL)
+   MOTEUR DE LECTURE (TEMPS RÉEL) - Ultra Rapide
    ============================================================ */
 async function playMix(startTime = 0) {
   if (state.playing) return;
@@ -1094,9 +1097,12 @@ async function playMix(startTime = 0) {
   if (state.ctx.state === 'suspended') await state.ctx.resume();
 
   let voiceBuf = state.voice;
+  // L'autotune est très lourd en JS. On le fait seulement si activé ET si on a le temps.
   if (voiceBuf && $('at-on').checked) {
     status('Calcul Autotune en cours… (Patientez)');
     progress(0.2);
+    // On yield pour laisser l'UI se rafraichir
+    await new Promise(r => setTimeout(r, 50)); 
     voiceBuf = await autotuneBuffer(voiceBuf, {
       strength: parseFloat($('at-strength').value),
       root: $('at-root').value,
@@ -1146,6 +1152,8 @@ async function playMix(startTime = 0) {
   
   state.analyser = state.ctx.createAnalyser();
   state.analyser.fftSize = 2048;
+  
+  // CORRECTION CRUCIALE : on ne connecte qu'ICI au destination pour éviter le double son
   state.liveNodes.mOut.connect(state.analyser);
   state.analyser.connect(state.ctx.destination);
 
@@ -1183,8 +1191,10 @@ function stopMix() {
 }
 
 /* ============================================================
-   WAVEFORM & SEEK (Live)
+   WAVEFORM & SEEK (Optimisé pour la fluidité)
    ============================================================ */
+let wfBackgroundImg = null;
+
 function drawWaveform(canvasId, buffer) {
   const canvas = $(canvasId); if (!canvas) return;
   const c2d = fitCanvas(canvas); if (!c2d) return;
@@ -1208,16 +1218,20 @@ function drawWaveform(canvasId, buffer) {
   c2d.stroke();
   c2d.strokeStyle = '#23232e'; c2d.beginPath();
   c2d.moveTo(0, mid); c2d.lineTo(w, mid); c2d.stroke();
+  
+  // Sauvegarde de l'image pour le curseur
+  wfBackgroundImg = c2d.getImageData(0, 0, w, h);
 }
 
 function drawPlayhead(ratio) {
   const canvas = $('waveform');
-  if (!canvas) return;
-  const buffer = state.render || state.voice || state.inst;
-  if (!buffer) return;
-  drawWaveform('waveform', buffer);
+  if (!canvas || !wfBackgroundImg) return;
   const c2d = canvas.getContext('2d');
   const w = canvas.width, h = canvas.height;
+  
+  // Restaure l'image de fond instantanément
+  c2d.putImageData(wfBackgroundImg, 0, 0);
+  
   const x = ratio * w;
   c2d.strokeStyle = '#ff5cf0';
   c2d.lineWidth = 3 * Math.min(devicePixelRatio, 2);
@@ -1376,6 +1390,9 @@ async function renderMixOffline(which = 'full') {
   if (which === 'full' && state.adlib && $('m-adlib').checked) {
     const src = ctx.createBufferSource(); src.buffer = state.adlib; src.connect(nodes.aIn); src.start(0);
   }
+
+  // Pour l'export offline, on connecte au destination du contexte offline
+  nodes.mOut.connect(ctx.destination);
 
   progress(0.7);
   let rendered = await ctx.startRendering();
@@ -1590,16 +1607,16 @@ window.addEventListener('load', checkMicEnvironment);
    PRESETS & HISTORY
    ============================================================ */
 const PRESETS = {
-  pop: { 'v-gain':0, 'v-eq-l':-2, 'v-eq-lm':1, 'v-eq-hm':2, 'v-eq-h':3, 'v-c-thr':-22, 'v-c-ratio':4, 'v-c-make':3, 'v-sat':15, 'fx-rev-mix':22, 'fx-dly-mix':12, 'at-on':true, 'at-strength':60, 'i-gain':-4, 'm-eq-l':1, 'm-eq-h':2, 'm-c-thr':-16, 'm-c-ratio':2, 'm-c-make':2, 'm-width':110, 'm-lufs':-14 },
-  rap: { 'v-gain':1, 'v-eq-l':-4, 'v-eq-lm':-1, 'v-eq-hm':2, 'v-eq-h':4, 'v-c-thr':-20, 'v-c-ratio':5, 'v-c-make':4, 'v-sat':25, 'at-on':true, 'at-strength':75, 'fx-rev-mix':12, 'fx-dly-mix':8, 'i-gain':-6, 'm-c-thr':-14, 'm-c-ratio':2.5, 'm-c-make':3, 'm-width':100, 'm-lufs':-11 },
-  rnb: { 'v-gain':0, 'v-eq-l':-1, 'v-eq-hm':1, 'v-eq-h':3, 'v-c-thr':-24, 'v-c-ratio':3.5, 'v-c-make':3, 'v-sat':18, 'at-on':true, 'at-strength':65, 'fx-rev-mix':32, 'fx-dly-mix':18, 'i-gain':-5, 'm-eq-h':2, 'm-width':120, 'm-lufs':-14 },
-  rock: { 'v-gain':0, 'v-eq-l':0, 'v-eq-hm':2, 'v-eq-h':3, 'v-c-thr':-20, 'v-c-ratio':4, 'v-c-make':4, 'v-sat':35, 'at-on':true, 'at-strength':25, 'fx-rev-mix':14, 'fx-dly-mix':6, 'i-gain':-3, 'm-c-thr':-12, 'm-c-ratio':3, 'm-c-make':3, 'm-lufs':-10 },
-  edm: { 'v-gain':1, 'v-eq-h':4, 'v-c-thr':-18, 'v-c-ratio':5, 'v-c-make':4, 'v-sat':30, 'at-on':true, 'at-strength':80, 'fx-rev-mix':28, 'fx-dly-mix':20, 'i-gain':-3, 'm-c-thr':-10, 'm-c-ratio':4, 'm-c-make':4, 'm-width':130, 'm-lufs':-9 },
+  pop: { 'v-gain':0, 'v-eq-l':-2, 'v-eq-lm':1, 'v-eq-hm':2, 'v-eq-h':3, 'v-c-thr':-22, 'v-c-ratio':4, 'v-c-make':3, 'v-sat':15, 'fx-rev-mix':22, 'fx-dly-mix':12, 'at-on':false, 'at-strength':60, 'i-gain':-4, 'm-eq-l':1, 'm-eq-h':2, 'm-c-thr':-16, 'm-c-ratio':2, 'm-c-make':2, 'm-width':110, 'm-lufs':-14 },
+  rap: { 'v-gain':1, 'v-eq-l':-4, 'v-eq-lm':-1, 'v-eq-hm':2, 'v-eq-h':4, 'v-c-thr':-20, 'v-c-ratio':5, 'v-c-make':4, 'v-sat':25, 'at-on':false, 'at-strength':75, 'fx-rev-mix':12, 'fx-dly-mix':8, 'i-gain':-6, 'm-c-thr':-14, 'm-c-ratio':2.5, 'm-c-make':3, 'm-width':100, 'm-lufs':-11 },
+  rnb: { 'v-gain':0, 'v-eq-l':-1, 'v-eq-hm':1, 'v-eq-h':3, 'v-c-thr':-24, 'v-c-ratio':3.5, 'v-c-make':3, 'v-sat':18, 'at-on':false, 'at-strength':65, 'fx-rev-mix':32, 'fx-dly-mix':18, 'i-gain':-5, 'm-eq-h':2, 'm-width':120, 'm-lufs':-14 },
+  rock: { 'v-gain':0, 'v-eq-l':0, 'v-eq-hm':2, 'v-eq-h':3, 'v-c-thr':-20, 'v-c-ratio':4, 'v-c-make':4, 'v-sat':35, 'at-on':false, 'at-strength':25, 'fx-rev-mix':14, 'fx-dly-mix':6, 'i-gain':-3, 'm-c-thr':-12, 'm-c-ratio':3, 'm-c-make':3, 'm-lufs':-10 },
+  edm: { 'v-gain':1, 'v-eq-h':4, 'v-c-thr':-18, 'v-c-ratio':5, 'v-c-make':4, 'v-sat':30, 'at-on':false, 'at-strength':80, 'fx-rev-mix':28, 'fx-dly-mix':20, 'i-gain':-3, 'm-c-thr':-10, 'm-c-ratio':4, 'm-c-make':4, 'm-width':130, 'm-lufs':-9 },
   lofi: { 'v-gain':-2, 'v-eq-l':3, 'v-eq-hm':-3, 'v-eq-h':-6, 'v-sat':45, 'v-sat-type':'soft', 'at-on':false, 'fx-rev-mix':25, 'fx-dly-mix':20, 'i-gain':-4, 'i-eq-h':-5, 'm-c-thr':-18, 'm-lufs':-14 },
   podcast: { 'v-gain':2, 'v-eq-l':-3, 'v-eq-lm':-1, 'v-eq-hm':2, 'v-eq-h':3, 'v-c-thr':-24, 'v-c-ratio':5, 'v-c-make':5, 'v-sat':10, 'at-on':false, 'fx-rev-mix':6, 'fx-dly-mix':0, 'i-gain':-12, 'm-c-thr':-14, 'm-c-ratio':3, 'm-c-make':3, 'm-lufs':-16 },
-  tiktok: { 'v-gain':2, 'v-eq-l':-2, 'v-eq-h':3, 'v-c-thr':-20, 'v-c-ratio':5, 'v-c-make':4, 'v-sat':20, 'at-on':true, 'at-strength':70, 'fx-rev-mix':18, 'fx-dly-mix':10, 'i-gain':-4, 'm-c-thr':-12, 'm-c-ratio':3, 'm-c-make':3, 'm-lufs':-9 },
-  drill: { 'v-gain':2, 'v-eq-l':-5, 'v-eq-hm':3, 'v-eq-h':5, 'v-c-thr':-18, 'v-c-ratio':5, 'v-c-make':5, 'v-sat':30, 'at-on':true, 'at-strength':85, 'fx-rev-mix':10, 'fx-dly-mix':6, 'i-gain':-5, 'm-c-thr':-12, 'm-c-make':4, 'm-lufs':-10 },
-  acoustic: { 'v-gain':0, 'v-eq-l':1, 'v-eq-hm':1, 'v-eq-h':2, 'v-c-thr':-26, 'v-c-ratio':2.5, 'v-c-make':2, 'v-sat':8, 'at-on':true, 'at-strength':40, 'fx-rev-mix':22, 'fx-dly-mix':10, 'i-gain':-4, 'm-width':105, 'm-lufs':-14 },
+  tiktok: { 'v-gain':2, 'v-eq-l':-2, 'v-eq-h':3, 'v-c-thr':-20, 'v-c-ratio':5, 'v-c-make':4, 'v-sat':20, 'at-on':false, 'at-strength':70, 'fx-rev-mix':18, 'fx-dly-mix':10, 'i-gain':-4, 'm-c-thr':-12, 'm-c-ratio':3, 'm-c-make':3, 'm-lufs':-9 },
+  drill: { 'v-gain':2, 'v-eq-l':-5, 'v-eq-hm':3, 'v-eq-h':5, 'v-c-thr':-18, 'v-c-ratio':5, 'v-c-make':5, 'v-sat':30, 'at-on':false, 'at-strength':85, 'fx-rev-mix':10, 'fx-dly-mix':6, 'i-gain':-5, 'm-c-thr':-12, 'm-c-make':4, 'm-lufs':-10 },
+  acoustic: { 'v-gain':0, 'v-eq-l':1, 'v-eq-hm':1, 'v-eq-h':2, 'v-c-thr':-26, 'v-c-ratio':2.5, 'v-c-make':2, 'v-sat':8, 'at-on':false, 'at-strength':40, 'fx-rev-mix':22, 'fx-dly-mix':10, 'i-gain':-4, 'm-width':105, 'm-lufs':-14 },
 };
 document.querySelectorAll('[data-preset]').forEach(btn => {
   btn.addEventListener('click', () => {
