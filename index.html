@@ -662,7 +662,6 @@ async function decodeFile(file) {
   return buf;
 }
 
-// Fusionne plusieurs AudioBuffers en un seul (comme un mix de stems)
 async function mergeAudioBuffers(buffers) {
   let maxLen = 0;
   let maxChannels = 2;
@@ -686,7 +685,6 @@ async function mergeAudioBuffers(buffers) {
         }
       }
     }
-    // Clipping prevention (limite à 1.0 / -1.0)
     for (let i = 0; i < outData.length; i++) {
       outData[i] = Math.max(-1, Math.min(1, outData[i]));
     }
@@ -729,7 +727,6 @@ $('f-voice').addEventListener('change', () => loadTrack('f-voice','n-voice','dz-
 $('f-inst').addEventListener('change', () => loadTrack('f-inst','n-inst','dz-inst','inst'));
 $('f-adlib').addEventListener('change', () => loadTrack('f-adlib','n-adlib','dz-adlib','adlib'));
 
-// Drag & Drop avec support multi-fichiers
 [['dz-voice','f-voice','n-voice','voice'],
  ['dz-inst','f-inst','n-inst','inst'],
  ['dz-adlib','f-adlib','n-adlib','adlib']].forEach(([dz,input,name,key]) => {
@@ -1416,7 +1413,7 @@ function drawPlayhead(ratio) {
   if (!canvas) return;
   const buffer = state.render || state.voice || state.inst;
   if (!buffer) return;
-  drawWaveform('waveform', buffer); // Redraw base
+  drawWaveform('waveform', buffer);
   const c2d = canvas.getContext('2d');
   const w = canvas.width, h = canvas.height;
   const x = ratio * w;
@@ -1432,7 +1429,7 @@ function drawWaveformAll() {
   drawWaveform('waveform', state.render || state.voice || state.inst);
 }
 
-// Seek au clic sur la waveform
+// Événement unifié pour éviter les doubles déclenchements sur mobile
 const wfCanvas = $('waveform');
 const handleSeek = (e) => {
   const buffer = state.render || state.voice || state.inst;
@@ -1444,29 +1441,34 @@ const handleSeek = (e) => {
   const ratio = Math.max(0, Math.min(1, x / rect.width));
   const time = ratio * buffer.duration;
   
-  if (state.playing) stopMix();
+  stopMix(); // Arrêt forcé et nettoyage
   playMix(time);
 };
-wfCanvas.addEventListener('mousedown', handleSeek);
-wfCanvas.addEventListener('touchstart', handleSeek, {passive: true});
-
+wfCanvas.addEventListener('pointerdown', handleSeek);
 
 /* ============================================================
-   LECTURE
+   LECTURE (Corrigée pour éviter les doubles sons)
    ============================================================ */
 async function playMix(startTime = 0) {
+  // Le verrou est mis TOUT DE SUITE pour empêcher les doubles clics
   if (state.playing) return;
+  state.playing = true;
+
   if (!state.ctx) state.ctx = new (window.AudioContext || window.webkitAudioContext)();
   if (state.ctx.state === 'suspended') await state.ctx.resume();
   
   const buf = state.render || await renderMix('full');
-  if (!buf) return;
+  if (!buf) { state.playing = false; return; }
   
+  // Si l'utilisateur a cliqué sur Stop pendant le calcul, on annule
+  if (!state.playing) return;
+
   const src = state.ctx.createBufferSource();
   src.buffer = buf;
   const analyser = state.ctx.createAnalyser();
   analyser.fftSize = 2048;
   const gain = state.ctx.createGain();
+  
   src.connect(analyser); analyser.connect(gain); gain.connect(state.ctx.destination);
   
   src.onended = () => { 
@@ -1475,13 +1477,13 @@ async function playMix(startTime = 0) {
     stopSpectrumLoop(); 
     stopPlayheadLoop(); 
     drawWaveformAll();
+    try { src.disconnect(); gain.disconnect(); } catch(e){}
   };
   
   src.start(0, startTime);
   
   state.source = src;
   state.analyser = analyser;
-  state.playing = true;
   state.startOffset = startTime;
   state.startCtxTime = state.ctx.currentTime;
   
@@ -1491,12 +1493,16 @@ async function playMix(startTime = 0) {
 }
 
 function stopMix() {
-  if (state.source) { try { state.source.stop(); } catch(e){} state.source = null; }
+  if (state.source) { 
+    try { state.source.stop(); } catch(e){} 
+    try { state.source.disconnect(); } catch(e){}
+    state.source = null; 
+  }
   state.playing = false;
   stopMeterLoop(); 
   stopSpectrumLoop();
   stopPlayheadLoop();
-  drawWaveformAll(); // Reinitialise la forme d'onde sans le curseur
+  drawWaveformAll();
 }
 
 /* ============================================================
