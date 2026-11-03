@@ -8,7 +8,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="format-detection" content="telephone=no">
-<title>BEasyMix Studio — Responsive</title>
+<title>EasyMix Studio — Responsive</title>
 <style>
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
   :root{
@@ -100,7 +100,7 @@
   .chip.active{border-color:var(--acc);color:var(--txt);background:#1e1a30}
   .chip[data-lufs]{font-size:11px;padding:6px 10px;min-height:32px}
   canvas{width:100%;display:block;background:#0e0e15;border-radius:8px;touch-action:none}
-  #waveform{height:clamp(80px,20vw,120px)}
+  #waveform{height:clamp(80px,20vw,120px);cursor:pointer}
   #spectrum{height:clamp(70px,18vw,110px)}
   #pitchCanvas{height:clamp(70px,18vw,110px);margin-top:10px}
   #micCanvas{height:clamp(50px,14vw,80px);margin-top:10px}
@@ -153,7 +153,7 @@
 <div class="app">
   <header>
     <div class="brand">
-      <h1>🎛️ BEasyMix Studio</h1>
+      <h1>🎛️ EasyMix Studio</h1>
       <div class="subtitle">
         <span>Prototype local · Web Audio API</span>
       </div>
@@ -237,8 +237,8 @@
     </div>
 
     <div class="card">
-      <h2>Analyse</h2>
-      <canvas id="waveform"></canvas>
+      <h2>Analyse (Clique pour avancer)</h2>
+      <canvas id="waveform" title="Cliquez pour avancer dans la musique"></canvas>
       <canvas id="spectrum" style="margin-top:8px"></canvas>
     </div>
   </div>
@@ -596,14 +596,15 @@
 
 <script>
 /* ============================================================
-   EASYMIX STUDIO — moteur audio (responsive + mic fix)
+   EASYMIX STUDIO — moteur audio
    ============================================================ */
 const $ = id => document.getElementById(id);
 const state = {
   voice: null, inst: null, adlib: null, voiceOut: null, render: null,
   ctx: null, playing: false, source: null,
   analyser: null, micStream: null, mediaRec: null, micChunks: [],
-  micRAF: null,
+  micRAF: null, playheadRAF: null,
+  startOffset: 0, startCtxTime: 0,
   slots: { A: null, B: null }, currentSlot: 'A',
   history: [], historyIdx: -1, maxHistory: 30,
   autoParamIds: [],
@@ -1307,7 +1308,7 @@ function normalizeToLufs(buffer, targetLufs) {
 }
 
 /* ============================================================
-   BOUTONS
+   BOUTONS & UI
    ============================================================ */
 function updateButtons() {
   const hasAny = state.voice || state.inst || state.adlib;
@@ -1322,7 +1323,7 @@ function updateButtons() {
 }
 
 /* ============================================================
-   WAVEFORM
+   WAVEFORM & SEEK
    ============================================================ */
 function drawWaveform(canvasId, buffer) {
   const canvas = $(canvasId); if (!canvas) return;
@@ -1331,7 +1332,7 @@ function drawWaveform(canvasId, buffer) {
   c2d.clearRect(0, 0, w, h);
   if (!buffer) return;
   const data = buffer.getChannelData(0);
-  const step = Math.floor(data.length / w);
+  const step = Math.floor(data.length / w) || 1;
   const mid = h / 2;
   c2d.strokeStyle = '#7c5cff'; c2d.lineWidth = Math.max(1, devicePixelRatio);
   c2d.beginPath();
@@ -1348,43 +1349,100 @@ function drawWaveform(canvasId, buffer) {
   c2d.strokeStyle = '#23232e'; c2d.beginPath();
   c2d.moveTo(0, mid); c2d.lineTo(w, mid); c2d.stroke();
 }
+
+function drawPlayhead(ratio) {
+  const canvas = $('waveform');
+  if (!canvas) return;
+  const buffer = state.render || state.voice || state.inst;
+  if (!buffer) return;
+  drawWaveform('waveform', buffer); // Redraw base
+  const c2d = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  const x = ratio * w;
+  c2d.strokeStyle = '#ff5cf0';
+  c2d.lineWidth = 3 * Math.min(devicePixelRatio, 2);
+  c2d.beginPath();
+  c2d.moveTo(x, 0);
+  c2d.lineTo(x, h);
+  c2d.stroke();
+}
+
 function drawWaveformAll() {
   drawWaveform('waveform', state.render || state.voice || state.inst);
 }
 
+// Seek au clic sur la waveform
+const wfCanvas = $('waveform');
+const handleSeek = (e) => {
+  const buffer = state.render || state.voice || state.inst;
+  if (!buffer) return;
+  const rect = wfCanvas.getBoundingClientRect();
+  let clientX = e.clientX;
+  if (e.touches && e.touches[0]) clientX = e.touches[0].clientX;
+  const x = clientX - rect.left;
+  const ratio = Math.max(0, Math.min(1, x / rect.width));
+  const time = ratio * buffer.duration;
+  
+  if (state.playing) stopMix();
+  playMix(time);
+};
+wfCanvas.addEventListener('mousedown', handleSeek);
+wfCanvas.addEventListener('touchstart', handleSeek, {passive: true});
+
+
 /* ============================================================
    LECTURE
    ============================================================ */
-async function playMix() {
+async function playMix(startTime = 0) {
   if (state.playing) return;
   if (!state.ctx) state.ctx = new (window.AudioContext || window.webkitAudioContext)();
   if (state.ctx.state === 'suspended') await state.ctx.resume();
+  
   const buf = state.render || await renderMix('full');
   if (!buf) return;
+  
   const src = state.ctx.createBufferSource();
   src.buffer = buf;
   const analyser = state.ctx.createAnalyser();
   analyser.fftSize = 2048;
   const gain = state.ctx.createGain();
   src.connect(analyser); analyser.connect(gain); gain.connect(state.ctx.destination);
-  src.onended = () => { state.playing = false; stopMeterLoop(); stopSpectrumLoop(); };
-  src.start();
+  
+  src.onended = () => { 
+    state.playing = false; 
+    stopMeterLoop(); 
+    stopSpectrumLoop(); 
+    stopPlayheadLoop(); 
+    drawWaveformAll();
+  };
+  
+  src.start(0, startTime);
+  
   state.source = src;
   state.analyser = analyser;
   state.playing = true;
+  state.startOffset = startTime;
+  state.startCtxTime = state.ctx.currentTime;
+  
   startMeterLoop();
   startSpectrumLoop();
+  startPlayheadLoop();
 }
+
 function stopMix() {
   if (state.source) { try { state.source.stop(); } catch(e){} state.source = null; }
   state.playing = false;
-  stopMeterLoop(); stopSpectrumLoop();
+  stopMeterLoop(); 
+  stopSpectrumLoop();
+  stopPlayheadLoop();
+  drawWaveformAll(); // Reinitialise la forme d'onde sans le curseur
 }
 
 /* ============================================================
-   METERS
+   METERS & SPECTRUM & PLAYHEAD LOOPS
    ============================================================ */
-let meterRAF = null;
+let meterRAF = null, spectrumRAF = null, playheadRAF = null;
+
 function startMeterLoop() {
   const analyser = state.analyser; if (!analyser) return;
   const timeData = new Float32Array(analyser.fftSize);
@@ -1408,23 +1466,7 @@ function startMeterLoop() {
   };
   loop();
 }
-function stopMeterLoop() { if (meterRAF) cancelAnimationFrame(meterRAF); meterRAF = null; }
-function setMeter(id, db, isCorr = false) {
-  const bar = $('meter-' + id), val = $('val-' + id);
-  if (!bar || !val) return;
-  if (isCorr) {
-    bar.style.width = ((db + 1) / 2 * 100) + '%';
-    val.textContent = db.toFixed(2);
-  } else {
-    bar.style.width = Math.max(0, Math.min(100, (db + 60) / 60 * 100)) + '%';
-    val.textContent = db <= -60 ? '-∞' : db.toFixed(1);
-  }
-}
 
-/* ============================================================
-   SPECTRUM
-   ============================================================ */
-let spectrumRAF = null;
 function startSpectrumLoop() {
   const analyser = state.analyser; if (!analyser) return;
   const canvas = $('spectrum');
@@ -1449,7 +1491,42 @@ function startSpectrumLoop() {
   };
   loop();
 }
+
+function startPlayheadLoop() {
+  const loop = () => {
+    if (!state.playing || !state.source) return;
+    const buf = state.render || state.voice || state.inst;
+    if (!buf) return;
+    const elapsed = state.ctx.currentTime - state.startCtxTime;
+    const current = state.startOffset + elapsed;
+    const ratio = Math.min(1, current / buf.duration);
+    
+    drawPlayhead(ratio);
+    
+    if (ratio >= 1) {
+      stopMix();
+      return;
+    }
+    playheadRAF = requestAnimationFrame(loop);
+  };
+  loop();
+}
+
+function stopMeterLoop() { if (meterRAF) cancelAnimationFrame(meterRAF); meterRAF = null; }
 function stopSpectrumLoop() { if (spectrumRAF) cancelAnimationFrame(spectrumRAF); spectrumRAF = null; }
+function stopPlayheadLoop() { if (playheadRAF) cancelAnimationFrame(playheadRAF); playheadRAF = null; }
+
+function setMeter(id, db, isCorr = false) {
+  const bar = $('meter-' + id), val = $('val-' + id);
+  if (!bar || !val) return;
+  if (isCorr) {
+    bar.style.width = ((db + 1) / 2 * 100) + '%';
+    val.textContent = db.toFixed(2);
+  } else {
+    bar.style.width = Math.max(0, Math.min(100, (db + 60) / 60 * 100)) + '%';
+    val.textContent = db <= -60 ? '-∞' : db.toFixed(1);
+  }
+}
 
 /* ============================================================
    EXPORT WAV
@@ -1515,14 +1592,15 @@ async function downloadRender(which = 'full') {
 }
 
 /* ============================================================
-   ÉVÉNEMENTS PRINCIPAUX
+   ÉVÉNEMENTS
    ============================================================ */
-$('btnPlay').addEventListener('click', playMix);
+$('btnPlay').addEventListener('click', () => playMix(0));
 $('btnStop').addEventListener('click', stopMix);
 $('btnRender').addEventListener('click', () => downloadRender('full'));
 $('btnRenderFull').addEventListener('click', () => downloadRender('full'));
 $('btnRenderVoice').addEventListener('click', () => downloadRender('voice'));
 $('btnRenderInst').addEventListener('click', () => downloadRender('inst'));
+
 $('btnPreviewDry').addEventListener('click', async () => {
   if (!state.inst) return;
   if (!state.ctx) state.ctx = new AudioContext();
@@ -1580,7 +1658,7 @@ $('btnAnalyze').addEventListener('click', async () => {
 });
 
 /* ============================================================
-   MICRO — VERSION ROBUSTE
+   MICRO
    ============================================================ */
 function checkMicEnvironment() {
   const isFile = location.protocol === 'file:';
@@ -1777,6 +1855,7 @@ $('btnRec').addEventListener('click', async () => {
   $('btnRec').textContent = '■ Stop';
 });
 
+// Un seul écouteur d'événement pour le bouton micro
 $('btnMic').addEventListener('click', requestMic);
 window.addEventListener('load', checkMicEnvironment);
 
@@ -1896,7 +1975,7 @@ $('btnCopyBtoA').addEventListener('click', () => { state.slots.A = state.slots.B
    ============================================================ */
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT' && e.target.type === 'text') return;
-  if (e.code === 'Space') { e.preventDefault(); state.playing ? stopMix() : playMix(); }
+  if (e.code === 'Space') { e.preventDefault(); state.playing ? stopMix() : playMix(0); }
   if (e.key === 'r' || e.key === 'R') downloadRender('full');
   if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); $('btnUndo').click(); }
   if (e.key === 'a' || e.key === 'A') { if (!e.ctrlKey && !e.metaKey) $('btnA').click(); }
