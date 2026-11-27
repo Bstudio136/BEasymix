@@ -14,7 +14,7 @@
 ![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black)
 ![Web Audio API](https://img.shields.io/badge/Web_Audio_API-FF5CF0?style=for-the-badge&logo=audio-technica&logoColor=white)
 ![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-121013?style=for-the-badge&logo=github&logoColor=white)
-![License-Restricted](https://img.shields.io/badge/License-Restricted-yellow?style=for-the-badge)
+![License-Proprietary](https://img.shields.io/badge/License-Proprietary-red?style=for-the-badge)
 
 A powerful, 100% client-side web-based audio mixing and mastering studio. Upload your vocal tracks, add your instrumental, and let the app process your song with professional-grade effects, all directly in your browser without any server.
 
@@ -86,7 +86,18 @@ To adapt this studio to your own needs:
 
 ## 📄 License
 
-This project is licensed under the **MIT Non-Commercial & No-Derivatives License (Restricted MIT)**. You are free to use the Software as-is for free, but modifying, reselling, or sublicensing the code is strictly forbidden. See the [LICENSE](LICENSE) file for details.
+This project is the personal property of **Bstudio136**. All rights reserved.
+
+**✅ Allowed:**
+- Viewing the source code and using the official hosted demo.
+- Contributing to improving the project (reporting bugs, suggesting features, or submitting pull requests) via the official repository.
+
+**❌ Strictly Prohibited:**
+- Copying, modifying, or redistributing this software (or any derivative work) for your own personal use.
+- Forking this project to use it in your own applications.
+- Selling, sublicensing, or commercially exploiting this software or any part of it.
+
+Any contribution submitted becomes the property of the author. Any use of the code outside the official repository requires explicit written permission from the author.
 
 <a href="https://hiddenswap.com/pay/AgRPwfFe" target="_blank" rel="noopener"><img src="https://hiddenswap.com/pay/AgRPwfFe/button.svg" alt="Donate with any coin" width="247" height="44"></a>
 
@@ -101,7 +112,7 @@ This project is licensed under the **MIT Non-Commercial & No-Derivatives License
 ![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black)
 ![Web Audio API](https://img.shields.io/badge/Web_Audio_API-FF5CF0?style=for-the-badge&logo=audio-technica&logoColor=white)
 ![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-121013?style=for-the-badge&logo=github&logoColor=white)
-![License-Restricted](https://img.shields.io/badge/License-Restricted-yellow?style=for-the-badge)
+![License-Proprietary](https://img.shields.io/badge/License-Proprietary-red?style=for-the-badge)
 
 Un studio de mixage et mastering audio puissant, 100% côté client (client-side) et s'exécutant dans le navigateur. Importez vos pistes vocales, ajoutez votre instrumental, et laissez l'application traiter votre morceau avec des effets de qualité professionnelle, sans aucun serveur.
 
@@ -173,6 +184,17 @@ Pour adapter ce studio à vos propres besoins :
 
 ## 📄 Licence
 
-Ce projet est sous **Licence MIT Restreinte (MIT Non-Commercial & No-Derivatives License)**. Vous êtes libre de l'utiliser gratuitement tel quel, mais toute modification, sous-licence ou revente est strictement interdite. Consultez le fichier [LICENSE](LICENSE) pour plus de détails.
+Ce projet est la propriété personnelle de **Bstudio136**. Tous droits réservés.
+
+**✅ Autorisé :**
+- Consulter le code source et utiliser la démo officielle hébergée.
+- Contribuer à l'amélioration du projet (rapports de bugs, suggestions de fonctionnalités, ou pull requests) via le dépôt officiel.
+
+**❌ Strictement interdit :**
+- Copier, modifier ou redistribuer ce logiciel (ou toute œuvre dérivée) pour votre usage personnel.
+- Forker ce projet pour l'utiliser dans vos propres applications.
+- Vendre, sous-licencier ou exploiter commercialement ce logiciel en tout ou en partie.
+
+Toute contribution soumise devient la propriété de l'auteur. Toute utilisation du code en dehors du dépôt officiel nécessite une autorisation écrite explicite de l'auteur.
 
 <a href="https://hiddenswap.com/pay/AgRPwfFe" target="_blank" rel="noopener"><img src="https://hiddenswap.com/pay/AgRPwfFe/button.svg" alt="Donate with any coin" width="247" height="44"></a>
