@@ -88,16 +88,9 @@ To adapt this studio to your own needs:
 
 This project is the personal property of **Bstudio136**. All rights reserved.
 
-**✅ Allowed:**
-- Viewing the source code and using the official hosted demo.
-- Contributing to improving the project (reporting bugs, suggesting features, or submitting pull requests) via the official repository.
+You are welcome to **contribute to improving the project** (via pull requests, bug reports, or feature suggestions) exclusively through the official repository. 
 
-**❌ Strictly Prohibited:**
-- Copying, modifying, or redistributing this software (or any derivative work) for your own personal use.
-- Forking this project to use it in your own applications.
-- Selling, sublicensing, or commercially exploiting this software or any part of it.
-
-Any contribution submitted becomes the property of the author. Any use of the code outside the official repository requires explicit written permission from the author.
+However, it is strictly forbidden to copy, modify for your own personal use, distribute, or sell this software (or any derivative work). See the [LICENSE](LICENSE) file for details.
 
 <a href="https://hiddenswap.com/pay/AgRPwfFe" target="_blank" rel="noopener"><img src="https://hiddenswap.com/pay/AgRPwfFe/button.svg" alt="Donate with any coin" width="247" height="44"></a>
 
@@ -186,15 +179,8 @@ Pour adapter ce studio à vos propres besoins :
 
 Ce projet est la propriété personnelle de **Bstudio136**. Tous droits réservés.
 
-**✅ Autorisé :**
-- Consulter le code source et utiliser la démo officielle hébergée.
-- Contribuer à l'amélioration du projet (rapports de bugs, suggestions de fonctionnalités, ou pull requests) via le dépôt officiel.
+Vous êtes invités à **contribuer à l'amélioration du projet** (via des pull requests, rapports de bugs ou suggestions de fonctionnalités) exclusivement via le dépôt officiel.
 
-**❌ Strictement interdit :**
-- Copier, modifier ou redistribuer ce logiciel (ou toute œuvre dérivée) pour votre usage personnel.
-- Forker ce projet pour l'utiliser dans vos propres applications.
-- Vendre, sous-licencier ou exploiter commercialement ce logiciel en tout ou en partie.
-
-Toute contribution soumise devient la propriété de l'auteur. Toute utilisation du code en dehors du dépôt officiel nécessite une autorisation écrite explicite de l'auteur.
+Cependant, il est strictement interdit de copier, modifier pour votre usage personnel, distribuer ou vendre ce logiciel (ou toute œuvre dérivée). Consultez le fichier [LICENSE](LICENSE) pour plus de détails.
 
 <a href="https://hiddenswap.com/pay/AgRPwfFe" target="_blank" rel="noopener"><img src="https://hiddenswap.com/pay/AgRPwfFe/button.svg" alt="Donate with any coin" width="247" height="44"></a>
