@@ -1,19 +1,31 @@
-MIT Non-Commercial & No-Derivatives License (MIT Restreinte)
+Custom Proprietary License (with Contribution Exception) / Licence Propriétaire Personnalisée
 
 🇬🇧 English Version
 -------------------
-Copyright (c) 2026 Bstudio136
+Copyright (c) 2026 Bstudio136. All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to use
-the Software as-is only, without modification, subject to the following conditions:
+This software and associated documentation files (the "Software") are the personal 
+property of the author.
 
-It is strictly forbidden to modify, merge, publish, distribute, sublicense, 
-and/or sell copies of the Software, or to permit persons to whom the Software is
-furnished to do so.
+Permission is hereby granted to:
+1. View and read the source code.
+2. Use the official hosted version of the Software as-is.
+3. Contribute to the improvement of the Software (e.g., reporting bugs, 
+   suggesting features, or submitting pull requests) exclusively through the 
+   official repository.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+It is strictly forbidden to:
+1. Copy, modify, or create derivative works of the Software for your own 
+   personal or commercial use.
+2. Distribute, publish, sublicense, or sell copies of the Software.
+3. Fork the repository to use the code in your own projects.
+
+By submitting a contribution (pull request, code snippet, or suggestion) to the 
+official repository, you agree that all rights, title, and interest in the 
+contribution become the exclusive property of the author (Bstudio136). 
+
+Any use of the Software outside the official repository requires explicit, 
+written permission from the author.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -26,17 +38,30 @@ SOFTWARE.
 
 🇫🇷 Version Française
 ---------------------
-Copyright (c) 2026 Bstudio136
+Copyright (c) 2026 Bstudio136. Tous droits réservés.
 
-L'autorisation est accordée, gratuitement, à toute personne obtenant une copie
-de ce logiciel et des fichiers de documentation associés (le "logiciel"), d'utiliser
-uniquement le Logiciel tel quel, sans modification, sous réserve des conditions suivantes :
+Ce logiciel et les fichiers de documentation associés (le "Logiciel") sont la 
+propriété personnelle de l'auteur.
 
-Il est strictement interdit de modifier, fusionner, publier, distribuer, sous-licencier 
-et/ou vendre des copies du Logiciel, ou de permettre à des tiers de le faire.
+L'autorisation est accordée de :
+1. Visualiser et lire le code source.
+2. Utiliser la version officielle hébergée du Logiciel telle quelle.
+3. Contribuer à l'amélioration du Logiciel (par exemple, signaler des bugs, 
+   suggérer des fonctionnalités ou soumettre des pull requests) exclusivement 
+   via le dépôt officiel.
 
-L'avis de droit d'auteur ci-dessus et cet avis d'autorisation seront inclus dans toutes
-les copies ou parties substantielles du logiciel.
+Il est strictement interdit de :
+1. Copier, modifier ou créer des œuvres dérivées du Logiciel pour votre propre 
+   usage personnel ou commercial.
+2. Distribuer, publier, sous-licencier ou vendre des copies du Logiciel.
+3. Forker le dépôt pour utiliser le code dans vos propres projets.
+
+En soumettant une contribution (pull request, extrait de code ou suggestion) au 
+dépôt officiel, vous acceptez que tous les droits, titres et intérêts sur la 
+contribution deviennent la propriété exclusive de l'auteur (Bstudio136).
+
+Toute utilisation du Logiciel en dehors du dépôt officiel nécessite une 
+autorisation écrite explicite de l'auteur.
 
 LE LOGICIEL EST FOURNI "TEL QUEL", SANS GARANTIE D'AUCUNE SORTE, EXPRESS OU
 IMPLICITE, Y COMPRIS, MAIS SANS S'Y LIMITER, AUX GARANTIES DE MARCHANDISATION,
